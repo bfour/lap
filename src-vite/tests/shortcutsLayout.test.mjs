@@ -15,7 +15,11 @@ new Function(
     module: ts.ModuleKind.CommonJS,
   }),
 )(exports);
-const { matchesShortcut, findShortcutMatches } = exports;
+const {
+  captureShortcut, findShortcutConflict, findShortcutMatches, findShortcutResetConflict,
+  getShortcutAdvanceLabels, getShortcutLabel, isShortcutEditable, matchesShortcut,
+  normalizeShortcutOverrides, shouldAdvanceShortcut,
+} = exports;
 
 const event = (overrides) => ({
   key: "",
@@ -105,7 +109,7 @@ test("single-letter actions match by character and still allow shift", () => {
 
 test("non-letter codes: digits and numpad keep exact physical matching", () => {
   assert.equal(
-    matchesShortcut("app.scale.increase", cmd("+", "NumpadAdd")),
+    matchesShortcut("app.scale.increase", cmd("+", "NumpadAdd"), "mac"),
     true,
   );
   // Digit bindings stay physical so shifted digit slots keep working on both
@@ -119,6 +123,62 @@ test("non-letter codes: digits and numpad keep exact physical matching", () => {
     matchesShortcut("meta.rating.one", event({ key: "1", code: "Digit1", shiftKey: true })),
     true,
   );
+});
+
+test("an override replaces the default on its own platform and updates the label", () => {
+  const custom = event({ key: "j", code: "KeyJ", ctrlKey: true });
+  const overrides = { linux: { "app.sidebar.toggle": captureShortcut(custom, "linux") } };
+  const old = event({ key: "b", code: "KeyB", ctrlKey: true });
+  assert.equal(matchesShortcut("app.sidebar.toggle", old, "linux", overrides), false);
+  assert.equal(matchesShortcut("app.sidebar.toggle", old, "windows", overrides), true);
+  assert.equal(matchesShortcut("app.sidebar.toggle", custom, "linux", overrides), true);
+  assert.equal(getShortcutLabel("app.sidebar.toggle", "linux", overrides), "Ctrl+J");
+});
+
+test("assignments detect overlapping scopes, secondary bindings, and implicit Shift variants", () => {
+  const ctrlC = captureShortcut(event({ key: "c", code: "KeyC", ctrlKey: true }), "linux");
+  assert.equal(findShortcutConflict("app.search", ctrlC, "linux"), "file.copy");
+  const space = captureShortcut(event({ key: " ", code: "Space" }), "linux");
+  assert.equal(findShortcutConflict("meta.tag", space, "linux"), "view.quickPreview");
+  const b = captureShortcut(event({ key: "b", code: "KeyB" }), "linux");
+  const overrides = { linux: { "meta.collection": captureShortcut(event({ key: "g", code: "KeyG" }), "linux") } };
+  assert.equal(findShortcutConflict("meta.favorite", b, "linux", overrides), "view.cycleBackground");
+  const shiftedDigit = captureShortcut(event({ key: "!", code: "Digit1", shiftKey: true }), "linux");
+  assert.equal(findShortcutConflict("meta.tag", shiftedDigit, "linux"), "meta.rating.one");
+  const modifiedDigit = captureShortcut(event({ key: "j", code: "KeyJ", shiftKey: true }), "linux");
+  assert.equal(findShortcutConflict("meta.tag", modifiedDigit, "linux"), undefined);
+});
+
+test("restoring a default detects another action that now uses that binding", () => {
+  const makeBinding = (key) => captureShortcut(event({ key, code: "Key" + key.toUpperCase() }), "linux");
+  const overrides = { linux: { "meta.favorite": makeBinding("j"), "meta.tag": makeBinding("f") } };
+  assert.equal(findShortcutResetConflict("meta.favorite", "linux", overrides), "meta.tag");
+  assert.equal(findShortcutResetConflict("view.quickPreview", "linux", overrides), undefined);
+});
+
+test("an explicit Shift shortcut performs the base action while the automatic variant advances", () => {
+  const press = event({ key: "J", code: "KeyJ", shiftKey: true });
+  const explicit = { linux: { "meta.favorite": captureShortcut(press, "linux") } };
+  assert.equal(matchesShortcut("meta.favorite", press, "linux", explicit), true);
+  assert.equal(shouldAdvanceShortcut("meta.favorite", press, "linux", explicit), false);
+  assert.deepEqual(getShortcutAdvanceLabels("meta.favorite", "linux", explicit), []);
+  const automatic = { linux: { "meta.favorite": captureShortcut({ ...press, key: "j", shiftKey: false }, "linux") } };
+  assert.equal(matchesShortcut("meta.favorite", press, "linux", automatic), true);
+  assert.equal(shouldAdvanceShortcut("meta.favorite", press, "linux", automatic), true);
+  assert.deepEqual(getShortcutAdvanceLabels("meta.favorite", "linux", automatic), ["Shift+J"]);
+});
+
+test("saved overrides are normalized and reserved keyboard controls stay available", () => {
+  assert.equal(captureShortcut(cmd("q", "KeyA"), "mac"), null);
+  assert.equal(captureShortcut(event({ key: "Tab", code: "Tab" }), "linux"), null);
+  assert.equal(isShortcutEditable("view.close", "linux"), false);
+  assert.equal(isShortcutEditable("app.preferences", "mac"), false);
+  assert.equal(isShortcutEditable("app.preferences", "linux"), true);
+  const valid = { key: "j", code: "KeyJ", modifiers: ["ctrl"] };
+  assert.deepEqual(normalizeShortcutOverrides({
+    mac: { "app.preferences": valid },
+    linux: { "file.copy": null, "unknown.action": valid, "app.sidebar.toggle": valid },
+  }), { linux: { "app.sidebar.toggle": valid } });
 });
 
 test("punctuation codes follow the layout character too", () => {

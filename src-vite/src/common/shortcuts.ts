@@ -78,6 +78,16 @@ export type ShortcutActionId =
 export type ShortcutModifier = 'ctrl' | 'meta' | 'alt' | 'shift' | 'cmdOrCtrl';
 
 type ShortcutLabel = string | Partial<Record<ShortcutPlatform, string>> & { default?: string };
+const CAPTURE_MODIFIERS = ['ctrl', 'alt', 'shift', 'meta'] as const;
+type CaptureModifier = typeof CAPTURE_MODIFIERS[number];
+
+export interface CustomShortcutBinding {
+  key: string;
+  code?: string;
+  modifiers: readonly CaptureModifier[];
+}
+
+export type ShortcutOverrides = Partial<Record<ShortcutPlatform, Partial<Record<ShortcutActionId, CustomShortcutBinding>>>>;
 
 export interface ShortcutBinding {
   key?: string;
@@ -86,6 +96,8 @@ export interface ShortcutBinding {
   platforms?: readonly ShortcutPlatform[];
   allowShift?: boolean;
   label: ShortcutLabel;
+  captured?: true;
+  codeHint?: string;
 }
 
 export interface ShortcutDefinition {
@@ -200,7 +212,7 @@ export const SHORTCUTS: readonly ShortcutDefinition[] = [
   },
   {
     id: 'file.copy',
-    contexts: ['content'],
+    contexts: ['content', 'image-viewer'],
     defaultBindings: [
       { code: 'KeyC', modifiers: ['meta'], platforms: ['mac'], allowShift: true, label: '⌘C' },
       { code: 'KeyC', modifiers: ['ctrl'], platforms: ['windows', 'linux'], label: 'Ctrl+C' },
@@ -388,6 +400,7 @@ export const SHORTCUTS: readonly ShortcutDefinition[] = [
     id: 'view.close',
     contexts: ['content', 'image-viewer', 'settings'],
     defaultBindings: [{ key: 'Escape', label: 'Esc' }],
+    readonly: true,
   },
   {
     id: 'view.togglePlayback',
@@ -396,12 +409,12 @@ export const SHORTCUTS: readonly ShortcutDefinition[] = [
   },
   {
     id: 'view.next',
-    contexts: ['content', 'image-viewer', 'album-list', 'album-folder'],
+    contexts: ['content', 'image-viewer'],
     defaultBindings: [{ key: 'ArrowRight', label: '→' }],
   },
   {
     id: 'view.previous',
-    contexts: ['content', 'image-viewer', 'album-list', 'album-folder'],
+    contexts: ['content', 'image-viewer'],
     defaultBindings: [{ key: 'ArrowLeft', label: '←' }],
   },
   {
@@ -489,6 +502,7 @@ export const SHORTCUTS: readonly ShortcutDefinition[] = [
     id: 'view.togglePane',
     contexts: ['image-viewer'],
     defaultBindings: [{ key: 'Tab', label: 'Tab' }],
+    readonly: true,
   },
 
 ] as const;
@@ -512,7 +526,10 @@ export function getShortcutsByContext(context: ShortcutContext): readonly Shortc
 export function getShortcutLabels(
   actionId: ShortcutActionId,
   platform: ShortcutPlatform = DEFAULT_PLATFORM,
+  overrides?: ShortcutOverrides,
 ): string[] {
+  const custom = overrides?.[platform]?.[actionId];
+  if (custom) return [formatCustomShortcut(custom, platform)];
   return getShortcut(actionId).defaultBindings
     .filter((binding) => isBindingAvailableOnPlatform(binding, platform))
     .map((binding) => getBindingLabel(binding, platform));
@@ -521,25 +538,28 @@ export function getShortcutLabels(
 export function getShortcutLabel(
   actionId: ShortcutActionId,
   platform: ShortcutPlatform = DEFAULT_PLATFORM,
+  overrides?: ShortcutOverrides,
 ): string {
-  return getShortcutLabels(actionId, platform)[0] ?? '';
+  return getShortcutLabels(actionId, platform, overrides)[0] ?? '';
 }
 
 export function matchesShortcut(
   actionId: ShortcutActionId,
   event: ShortcutEventLike,
   platform: ShortcutPlatform = DEFAULT_PLATFORM,
+  overrides?: ShortcutOverrides,
 ): boolean {
-  return getShortcut(actionId).defaultBindings.some((binding) => matchesBinding(binding, event, platform));
+  return getEffectiveBindings(actionId, platform, overrides).some((binding) => matchesBinding(binding, event, platform));
 }
 
 export function findShortcutMatches(
   context: ShortcutContext,
   event: ShortcutEventLike,
   platform: ShortcutPlatform = DEFAULT_PLATFORM,
+  overrides?: ShortcutOverrides,
 ): ShortcutActionId[] {
   return getShortcutsByContext(context)
-    .filter((shortcut) => shortcut.defaultBindings.some((binding) => matchesBinding(binding, event, platform)))
+    .filter((shortcut) => matchesShortcut(shortcut.id, event, platform, overrides))
     .map((shortcut) => shortcut.id);
 }
 
@@ -605,7 +625,7 @@ function matchesBinding(
   platform: ShortcutPlatform,
 ): boolean {
   if (!isBindingAvailableOnPlatform(binding, platform)) return false;
-  if (binding.key && event.key !== binding.key) return false;
+  if (binding.key && (binding.captured ? normalizeCapturedKey(event.key) : event.key) !== binding.key) return false;
   if (binding.code && !matchesKeyCode(binding.code, event)) return false;
 
   const modifiers = new Set(binding.modifiers ?? []);
@@ -654,4 +674,225 @@ function matchesKeyCode(code: string, event: ShortcutEventLike): boolean {
     return key.toLowerCase() === expected;
   }
   return event.code === code;
+}
+
+const NATIVE_MAC_ACTIONS = new Set<ShortcutActionId>([
+  'app.preferences', 'file.selectAll', 'file.copy', 'file.paste',
+]);
+const ADVANCE_ACTIONS = new Set<ShortcutActionId>([
+  'meta.favorite', 'meta.rating.clear', 'meta.rating.one', 'meta.rating.two',
+  'meta.rating.three', 'meta.rating.four', 'meta.rating.five',
+  'meta.culling.pick', 'meta.culling.reject', 'meta.culling.unreviewed',
+]);
+
+export function isShortcutEditable(actionId: ShortcutActionId, platform: ShortcutPlatform): boolean {
+  const shortcut = shortcutMap.get(actionId);
+  return Boolean(shortcut && !shortcut.readonly && !(platform === 'mac' && NATIVE_MAC_ACTIONS.has(actionId)));
+}
+
+export function hasShortcutOverride(
+  actionId: ShortcutActionId,
+  platform: ShortcutPlatform,
+  overrides?: ShortcutOverrides,
+): boolean {
+  return Boolean(overrides?.[platform]?.[actionId]);
+}
+
+function normalizeCapturedKey(key: string): string {
+  if (key === 'Space' || key === 'Spacebar') return ' ';
+  return key.length === 1 ? key.toLowerCase() : key;
+}
+
+function isReservedShortcut(binding: CustomShortcutBinding, platform: ShortcutPlatform): boolean {
+  const { key, modifiers } = binding;
+  if (['Alt', 'AltGraph', 'CapsLock', 'Compose', 'Control', 'Dead', 'Fn', 'Meta', 'NumLock',
+    'Process', 'ScrollLock', 'Shift', 'Unidentified', 'Escape', 'Tab'].includes(key)) return true;
+
+  if (modifiers.every((modifier) => modifier === 'shift') && ['ArrowUp', 'ArrowDown'].includes(key)) return true;
+  if (platform !== 'mac') return key === 'F4' && modifiers.length === 1 && modifiers.includes('alt');
+  if (!modifiers.includes('meta') || modifiers.includes('ctrl')) return false;
+  if (modifiers.includes('alt')) return key === 'h' && !modifiers.includes('shift');
+  if (modifiers.includes('shift')) return key === 'z';
+  return ['q', 'w', 'm', 'h', 'x', 'z', 'a', 'c', 'v', ','].includes(key);
+}
+
+function normalizeCustomBinding(value: unknown, platform: ShortcutPlatform): CustomShortcutBinding | null {
+  if (!value || typeof value !== 'object') return null;
+  const { key, code, modifiers } = value as Partial<CustomShortcutBinding>;
+  if (typeof key !== 'string' || !key || key.length > 40 || !Array.isArray(modifiers)
+    || !modifiers.every((modifier) => CAPTURE_MODIFIERS.includes(modifier))) return null;
+  const binding: CustomShortcutBinding = {
+    key: normalizeCapturedKey(key),
+    modifiers: CAPTURE_MODIFIERS.filter((modifier) => modifiers.includes(modifier)),
+  };
+  if (typeof code === 'string' && /^[A-Za-z0-9]+$/.test(code) && code.length <= 40) binding.code = code;
+  return isReservedShortcut(binding, platform) ? null : binding;
+}
+
+export function captureShortcut(event: KeyboardEvent, platform = DEFAULT_PLATFORM): CustomShortcutBinding | null {
+  if (event.isComposing || event.getModifierState?.('AltGraph')) return null;
+  return normalizeCustomBinding({
+    key: event.key,
+    code: event.code,
+    modifiers: CAPTURE_MODIFIERS.filter((modifier) => event[`${modifier}Key`]),
+  }, platform);
+}
+
+export function normalizeShortcutOverrides(value: unknown): ShortcutOverrides {
+  const result: ShortcutOverrides = {};
+  if (!value || typeof value !== 'object') return result;
+
+  for (const platform of ['mac', 'windows', 'linux'] as const) {
+    const bindings = (value as ShortcutOverrides)[platform];
+    if (!bindings || typeof bindings !== 'object') continue;
+    for (const { id } of SHORTCUTS) {
+      if (!isShortcutEditable(id, platform)) continue;
+      const binding = normalizeCustomBinding(bindings[id], platform);
+      if (binding) (result[platform] ??= {})[id] = binding;
+    }
+  }
+  return result;
+}
+
+const KEY_LABELS: Record<string, string> = {
+  ' ': 'Space', ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓',
+  Backspace: 'Backspace', Delete: 'Delete', PageUp: 'PgUp', PageDown: 'PgDn',
+};
+const MAC_KEYS: Record<string, string> = { Enter: '⏎', Backspace: '⌫', Delete: '⌦' };
+const MAC_MODIFIERS = { ctrl: '⌃', alt: '⌥', shift: '⇧', meta: '⌘' };
+const OTHER_MODIFIERS = { ctrl: 'Ctrl', alt: 'Alt', shift: 'Shift', meta: 'Meta' };
+
+function formatCustomShortcut(binding: CustomShortcutBinding, platform: ShortcutPlatform): string {
+  const { key, code, modifiers } = binding;
+  const upperKey = key.toUpperCase();
+  const keyLabel = code?.startsWith('Numpad')
+    ? `Num ${key === '+' ? 'Add' : upperKey}`
+    : (Object.hasOwn(KEY_LABELS, key) ? KEY_LABELS[key] : upperKey.length === 1 ? upperKey : key);
+  if (platform === 'mac') {
+    const macKey = Object.hasOwn(MAC_KEYS, key) ? MAC_KEYS[key] : keyLabel;
+    return [...CAPTURE_MODIFIERS.filter((modifier) => modifiers.includes(modifier))
+      .map((modifier) => MAC_MODIFIERS[modifier]), macKey].join('');
+  }
+  return [...modifiers.map((modifier) => OTHER_MODIFIERS[modifier]), keyLabel].join('+');
+}
+
+function getCustomBindings(
+  actionId: ShortcutActionId,
+  custom: CustomShortcutBinding,
+  platform: ShortcutPlatform,
+): ShortcutBinding[] {
+  const main: ShortcutBinding = {
+    key: custom.key,
+    code: custom.code?.startsWith('Numpad') ? custom.code : undefined,
+    codeHint: custom.code,
+    modifiers: custom.modifiers,
+    label: formatCustomShortcut(custom, platform),
+    captured: true,
+  };
+  if (!ADVANCE_ACTIONS.has(actionId) || custom.modifiers.includes('shift')) return [main];
+
+  // Shift usually preserves the key for named keys and changes only the case
+  // of a letter. Shifted number-row keys need their physical digit instead.
+  const digitCode = /^[0-9]$/.test(custom.key) && /^Digit[0-9]$/.test(custom.code ?? '') ? custom.code : undefined;
+  if (!digitCode && custom.key.length === 1 && !/\p{L}/u.test(custom.key) && custom.key !== ' ') return [main];
+  const shifted = { ...custom, modifiers: [...custom.modifiers, 'shift'] as const };
+  return [main, {
+    ...main,
+    key: digitCode ? undefined : main.key,
+    code: digitCode ?? main.code,
+    modifiers: shifted.modifiers,
+    label: formatCustomShortcut(shifted, platform),
+  }];
+}
+
+function getEffectiveBindings(actionId: ShortcutActionId, platform: ShortcutPlatform, overrides?: ShortcutOverrides) {
+  const custom = overrides?.[platform]?.[actionId];
+  return custom ? getCustomBindings(actionId, custom, platform) : getShortcut(actionId).defaultBindings;
+}
+
+export function getShortcutAdvanceLabels(
+  actionId: ShortcutActionId,
+  platform: ShortcutPlatform,
+  overrides?: ShortcutOverrides,
+): string[] {
+  if (!ADVANCE_ACTIONS.has(actionId)) return [];
+  const custom = overrides?.[platform]?.[actionId];
+  if (custom) return getCustomBindings(actionId, custom, platform).slice(1).map((binding) => getBindingLabel(binding, platform));
+  return getShortcut(actionId).defaultBindings
+    .filter((binding) => isBindingAvailableOnPlatform(binding, platform) && (binding.allowShift || binding.modifiers?.includes('shift')))
+    .map((binding) => {
+      const label = getBindingLabel(binding, platform);
+      return binding.allowShift ? `${platform === 'mac' ? '⇧' : 'Shift+'}${label}` : label;
+    });
+}
+
+export function shouldAdvanceShortcut(
+  actionId: ShortcutActionId,
+  event: ShortcutEventLike,
+  platform: ShortcutPlatform,
+  overrides?: ShortcutOverrides,
+): boolean {
+  return Boolean(event.shiftKey && !overrides?.[platform]?.[actionId]?.modifiers.includes('shift'));
+}
+
+function eventsForBinding(binding: ShortcutBinding, platform: ShortcutPlatform): ShortcutEventLike[] {
+  if (!isBindingAvailableOnPlatform(binding, platform)) return [];
+  const { code, codeHint, modifiers = [] } = binding;
+  const cmdOrCtrl = modifiers.includes('cmdOrCtrl');
+  const shift = modifiers.includes('shift');
+  const digit = /^Digit([0-9])$/.exec(code ?? '')?.[1];
+  const key = binding.key ?? /^Key([A-Z])$/.exec(code ?? '')?.[1]?.toLowerCase()
+    ?? CODE_CHAR[code ?? ''] ?? digit ?? (code === 'NumpadAdd' ? '+' : code === 'NumpadSubtract' ? '-' : code?.slice(6)) ?? '';
+  const keyCode = code ?? codeHint;
+  const sample = {
+    key, code: keyCode, shiftKey: shift, altKey: modifiers.includes('alt'),
+    ctrlKey: modifiers.includes('ctrl') || (cmdOrCtrl && platform !== 'mac'),
+    metaKey: modifiers.includes('meta') || (cmdOrCtrl && platform === 'mac'),
+  };
+  if (digit && shift) return [sample, { ...sample, key: ')!@#$%^&*('[Number(digit)] }];
+  return binding.allowShift && !shift ? [sample, { ...sample, shiftKey: true }] : [sample];
+}
+
+function bindingOverlaps(left: ShortcutBinding, right: ShortcutBinding, platform: ShortcutPlatform): boolean {
+  return eventsForBinding(left, platform).some((event) => matchesBinding(right, event, platform))
+    || eventsForBinding(right, platform).some((event) => matchesBinding(left, event, platform));
+}
+
+function actionsShareContext(action: ShortcutDefinition, other: ShortcutDefinition): boolean {
+  return action.contexts.includes('global') || other.contexts.includes('global')
+    || action.contexts.some((context) => other.contexts.includes(context));
+}
+
+export function findShortcutConflict(
+  actionId: ShortcutActionId,
+  custom: CustomShortcutBinding,
+  platform: ShortcutPlatform,
+  overrides?: ShortcutOverrides,
+): ShortcutActionId | undefined {
+  return findConflictingAction(actionId, getCustomBindings(actionId, custom, platform), platform, overrides, false);
+}
+
+export function findShortcutResetConflict(
+  actionId: ShortcutActionId,
+  platform: ShortcutPlatform,
+  overrides?: ShortcutOverrides,
+): ShortcutActionId | undefined {
+  return findConflictingAction(actionId, getShortcut(actionId).defaultBindings, platform, overrides, true);
+}
+
+function findConflictingAction(
+  actionId: ShortcutActionId,
+  bindings: readonly ShortcutBinding[],
+  platform: ShortcutPlatform,
+  overrides: ShortcutOverrides | undefined,
+  onlyOverrides: boolean,
+): ShortcutActionId | undefined {
+  const action = getShortcut(actionId);
+  return SHORTCUTS.find((other) => {
+    if (other.id === actionId || !actionsShareContext(action, other)) return false;
+    if (onlyOverrides && !hasShortcutOverride(other.id, platform, overrides)) return false;
+    return getEffectiveBindings(other.id, platform, overrides).some((otherBinding) =>
+      bindings.some((binding) => bindingOverlaps(binding, otherBinding, platform)),
+    );
+  })?.id;
 }

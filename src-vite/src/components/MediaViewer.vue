@@ -911,8 +911,10 @@ const toggleMaximizeWindow = () => {
 };
 const closeWindow = () => desktopAppWindow?.close();
 const shortcutPlatform: ShortcutPlatform = isMac ? 'mac' : (isLinux ? 'linux' : 'windows');
-const shortcut = (actionId: ShortcutActionId) => getShortcutLabel(actionId, shortcutPlatform);
+const shortcut = (actionId: ShortcutActionId) => getShortcutLabel(actionId, shortcutPlatform, config.shortcutBindings);
 const ratingShortcutLabel = computed(() => {
+  const overrides = config.shortcutBindings?.[shortcutPlatform];
+  if (Object.keys(overrides ?? {}).some((actionId) => actionId.startsWith('meta.rating.'))) return '';
   const first = shortcut('meta.rating.clear');
   const last = shortcut('meta.rating.five');
   return first && last ? `${first}-${last}` : '';

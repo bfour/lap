@@ -121,6 +121,7 @@ import { watch, ref, onMounted, onBeforeUnmount, computed, nextTick, toRaw } fro
 import { useI18n } from 'vue-i18n';
 import { useUIStore } from '@/stores/uiStore';
 import { config } from '@/common/config';
+import { DEFAULT_PLATFORM, findShortcutMatches, hasShortcutOverride } from '@/common/shortcuts';
 import { thumbnailProfile } from '@/common/thumbnailProfiles';
 import Thumbnail from '@/components/Thumbnail.vue';
 import VirtualScroll from '@/components/VirtualScroll.vue';
@@ -681,14 +682,16 @@ function onWheel(e: WheelEvent) {
 
 function onKeyDown(e: KeyboardEvent) {
   // Prevent default scrolling for arrow keys and spacebar
-  if (['ArrowUp', 'ArrowDown', 'Space', ' '].includes(e.key)) {
-    // Allow default behavior if typing in an input
-    const target = e.target as HTMLElement;
-    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
-      return;
-    }
-    e.preventDefault();
-  }
+  if (e.defaultPrevented || e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
+  const isVerticalArrow = e.key === 'ArrowUp' || e.key === 'ArrowDown';
+  const isSpace = e.key === 'Space' || e.key === ' ';
+  if (!isVerticalArrow && (!isSpace || e.shiftKey)) return;
+  const target = e.target as HTMLElement | null;
+  if (target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-shortcut-capture]')) return;
+  // Leave a customized Space binding to the content shortcut handler.
+  if (isSpace && findShortcutMatches('content', e, DEFAULT_PLATFORM, config.shortcutBindings)
+    .some((actionId) => hasShortcutOverride(actionId, DEFAULT_PLATFORM, config.shortcutBindings))) return;
+  e.preventDefault();
 }
 
 function scrollToItem(index: number, center = false) {

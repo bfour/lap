@@ -9,6 +9,9 @@
         <div
           v-for="tab in settingsTabs"
           :key="tab.id"
+          role="button"
+          tabindex="0"
+          :aria-current="config.settings.tabIndex === tab.id ? 'page' : undefined"
           :class="[
             'px-3 py-2 rounded-box cursor-pointer transition-colors duration-200 font-medium flex items-center',
             config.settings.tabIndex === tab.id
@@ -16,6 +19,8 @@
               : 'hover:text-base-content hover:bg-base-100/30'
           ]"
           @click="config.settings.tabIndex = tab.id"
+          @keydown.enter.stop.prevent="config.settings.tabIndex = tab.id"
+          @keydown.space.stop.prevent="config.settings.tabIndex = tab.id"
         >
           {{ $t(tab.label) }}
         </div>
@@ -649,6 +654,19 @@
 
         <!-- Shortcuts Tab -->
         <div v-else-if="config.settings.tabIndex === SETTINGS_TAB.SHORTCUTS" class="@container flex flex-col space-y-2">
+          <div class="flex items-center justify-between gap-3 px-2">
+            <p class="text-sm">{{ $t('settings.shortcuts.edit_hint') }}</p>
+            <button
+              type="button"
+              class="btn btn-sm btn-ghost shrink-0"
+              :disabled="!hasCustomShortcuts"
+              @click="resetAllShortcuts"
+              @keydown.enter.stop
+              @keydown.space.stop
+            >
+              {{ $t('settings.shortcuts.reset_all') }}
+            </button>
+          </div>
           <div
             v-for="section in shortcutSections"
             :key="section.key"
@@ -657,42 +675,74 @@
             <div class="flex items-center gap-2 text-base-content/30">
               <span class="font-bold uppercase text-[10px] tracking-widest">{{ section.title }}</span>
             </div>
-            <div class="sr-only" role="list">
-              <div v-for="item in section.items" :key="item.actionId" role="listitem">
-                <div v-for="(row, rowIndex) in item.rows" :key="rowIndex">
-                  {{ row.label }}: {{ row.keys.join(' ') }}
-                </div>
-              </div>
-            </div>
-            <div class="flex flex-col @[36rem]:flex-row @[36rem]:gap-4" aria-hidden="true">
+            <div class="grid grid-cols-1 gap-x-4 @[36rem]:grid-cols-2">
               <div
-                v-for="(column, columnIndex) in section.columns"
-                :key="columnIndex"
-                class="contents @[36rem]:block @[36rem]:flex-1 @[36rem]:min-w-0"
+                v-for="item in section.items"
+                :key="item.id"
+                class="min-w-0 mb-1"
               >
-                <div
-                  v-for="item in column"
-                  :key="item.actionId"
-                  :style="{ order: item.order }"
-                  class="mb-1"
-                >
-                  <div
-                    v-for="(row, rowIndex) in item.rows"
-                    :key="rowIndex"
-                    class="min-h-9 flex items-center justify-between gap-4 px-1 py-1 rounded-box hover:bg-base-100/10 transition-colors duration-200"
-                  >
-                    <div class="min-w-0 text-sm leading-5">{{ row.label }}</div>
-                    <div class="shrink-0 flex items-center gap-1">
-                      <span
-                        v-for="(key, keyIndex) in row.keys"
-                        :key="keyIndex"
-                        class="min-w-7 h-7 px-2 inline-flex items-center justify-center rounded-box border border-base-content/10 bg-base-100/40 text-xs font-semibold text-base-content/30 shadow-sm"
-                      >
-                        {{ key }}
-                      </span>
+                <div class="min-h-9 flex items-center justify-between gap-2 px-1 py-1 rounded-box">
+                  <span class="min-w-0 text-sm leading-5">{{ item.label }}</span>
+                  <div class="shrink-0 flex items-center gap-1">
+                    <button
+                      v-if="item.editable"
+                      :id="item.id"
+                      type="button"
+                      class="btn btn-sm btn-outline gap-1 min-h-7 h-auto px-2 border-base-content/20 normal-case"
+                      :class="{ 'btn-primary': recordingShortcut === item.id }"
+                      :aria-label="recordingShortcut === item.id
+                        ? $t('settings.shortcuts.record_action', { action: item.label })
+                        : $t('settings.shortcuts.change_action', { action: item.label, shortcut: item.keys.join(' ') || $t('settings.shortcuts.unassigned') })"
+                      :data-shortcut-capture="recordingShortcut === item.id ? '' : undefined"
+                      @click="toggleShortcutCapture(item.id, $event)"
+                      @keydown="recordShortcutKey(item.id, item.actionId, $event)"
+                      @blur="cancelShortcutCapture(item.id)"
+                    >
+                      <span v-if="recordingShortcut === item.id">{{ $t('settings.shortcuts.press_keys') }}</span>
+                      <template v-else-if="item.keys.length">
+                        <kbd v-for="(key, index) in item.keys" :key="index">{{ key }}</kbd>
+                      </template>
+                      <span v-else>{{ $t('settings.shortcuts.unassigned') }}</span>
+                    </button>
+                    <div v-else class="flex items-center gap-1">
+                      <kbd
+                        v-for="(key, index) in item.keys"
+                        :key="index"
+                        class="kbd kbd-sm"
+                      >{{ key }}</kbd>
                     </div>
+                    <button
+                      v-if="item.customized"
+                      type="button"
+                      class="btn btn-ghost btn-xs btn-square"
+                      :title="$t('settings.shortcuts.reset_action', { action: item.label })"
+                      :aria-label="$t('settings.shortcuts.reset_action', { action: item.label })"
+                      @click="resetShortcut(item.id, item.actionId)"
+                      @keydown.enter.stop
+                      @keydown.space.stop
+                    >
+                      <IconRestore class="size-3.5" aria-hidden="true" />
+                    </button>
                   </div>
                 </div>
+                <div
+                  v-if="item.advanceKeys.length"
+                  class="flex items-center justify-between gap-2 px-1 py-0.5 text-xs text-base-content/60"
+                >
+                  <span>{{ item.advanceLabel }}</span>
+                  <div class="shrink-0 flex items-center gap-1">
+                    <kbd
+                      v-for="(key, index) in item.advanceKeys"
+                      :key="index"
+                      class="kbd kbd-xs"
+                    >{{ key }}</kbd>
+                  </div>
+                </div>
+                <p
+                  v-if="shortcutFeedback?.id === item.id"
+                  class="px-1 text-xs text-error"
+                  role="alert"
+                >{{ shortcutFeedback.message }}</p>
               </div>
             </div>
           </div>
@@ -823,7 +873,18 @@ import {
 } from '@/common/api';
 import { formatFileSize, isLinux, isMac, SCALE_VALUES } from '@/common/utils';
 import { useAppearance } from '@/composables/useAppearance';
-import { getShortcutLabels, ShortcutActionId, ShortcutPlatform } from '@/common/shortcuts';
+import {
+  captureShortcut,
+  findShortcutConflict,
+  findShortcutResetConflict,
+  getShortcutAdvanceLabels,
+  getShortcutLabels,
+  hasShortcutOverride,
+  isShortcutEditable,
+  VIEW_BACKGROUND_SHORTCUTS,
+  type ShortcutActionId,
+  type ShortcutPlatform,
+} from '@/common/shortcuts';
 import { useToast } from '@/common/toast';
 import { IconClose, IconRestore } from '@/common/icons';
 
@@ -1276,8 +1337,6 @@ type ShortcutDisplayItem = {
   actionId: ShortcutActionId;
   labelKey: string;
   advanceLabelKey?: string;
-  keys?: string[];
-  backgroundValue?: number;
 };
 
 const shortcutDisplaySections: Array<{ key: string; items: ShortcutDisplayItem[] }> = [
@@ -1317,6 +1376,8 @@ const shortcutDisplaySections: Array<{ key: string; items: ShortcutDisplayItem[]
     items: [
       { actionId: 'view.zoomIn', labelKey: 'zoom_in' },
       { actionId: 'view.zoomOut', labelKey: 'zoom_out' },
+      { actionId: 'view.zoomInDirectional', labelKey: 'zoom_in_directional' },
+      { actionId: 'view.zoomOutDirectional', labelKey: 'zoom_out_directional' },
       { actionId: 'view.zoomFit', labelKey: 'zoom_fit' },
       { actionId: 'meta.rotate', labelKey: 'rotate' },
       { actionId: 'meta.rotateCounterclockwise', labelKey: 'rotate_counterclockwise' },
@@ -1325,6 +1386,7 @@ const shortcutDisplaySections: Array<{ key: string; items: ShortcutDisplayItem[]
       { actionId: 'view.cycleBackground', labelKey: 'cycle_background' },
       { actionId: 'view.cycleRawPreview', labelKey: 'cycle_raw_preview' },
       { actionId: 'view.toggleFullscreen', labelKey: 'fullscreen' },
+      { actionId: 'view.togglePane', labelKey: 'toggle_pane' },
     ],
   },
   {
@@ -1353,7 +1415,12 @@ const shortcutDisplaySections: Array<{ key: string; items: ShortcutDisplayItem[]
     key: 'metadata',
     items: [
       { actionId: 'meta.favorite', labelKey: 'toggle_favorite', advanceLabelKey: 'toggle_favorite_and_next' },
-      { actionId: 'meta.rating.clear', labelKey: 'set_clear_rating', advanceLabelKey: 'set_clear_rating_and_next', keys: ['0 ~ 5'] },
+      { actionId: 'meta.rating.clear', labelKey: 'clear_rating', advanceLabelKey: 'set_clear_rating_and_next' },
+      { actionId: 'meta.rating.one', labelKey: 'rate_one', advanceLabelKey: 'set_clear_rating_and_next' },
+      { actionId: 'meta.rating.two', labelKey: 'rate_two', advanceLabelKey: 'set_clear_rating_and_next' },
+      { actionId: 'meta.rating.three', labelKey: 'rate_three', advanceLabelKey: 'set_clear_rating_and_next' },
+      { actionId: 'meta.rating.four', labelKey: 'rate_four', advanceLabelKey: 'set_clear_rating_and_next' },
+      { actionId: 'meta.rating.five', labelKey: 'rate_five', advanceLabelKey: 'set_clear_rating_and_next' },
       { actionId: 'meta.culling.pick', labelKey: 'mark_pick', advanceLabelKey: 'mark_pick_and_next' },
       { actionId: 'meta.culling.reject', labelKey: 'mark_rejected', advanceLabelKey: 'mark_rejected_and_next' },
       { actionId: 'meta.culling.unreviewed', labelKey: 'mark_unreviewed', advanceLabelKey: 'mark_unreviewed_and_next' },
@@ -1362,52 +1429,125 @@ const shortcutDisplaySections: Array<{ key: string; items: ShortcutDisplayItem[]
       { actionId: 'meta.edit', labelKey: 'edit_metadata' },
     ],
   },
+  {
+    key: 'background',
+    items: VIEW_BACKGROUND_SHORTCUTS.map(({ actionId, value }) => ({
+      actionId,
+      labelKey: `settings.image_view.view_background_options.${value}`,
+    })),
+  },
 ];
 
-const shortcutSections = computed(() => {
-  const shortcutMessages = localeMsg.value.settings.shortcuts;
-  const translatedActionLabels: Partial<Record<ShortcutActionId, string>> = {
-    'meta.edit': localeMsg.value.file_info.edit_metadata,
-    'view.toggleFullscreen': localeMsg.value.image_viewer.toolbar.fullscreen,
-  };
-  return shortcutDisplaySections.map((section) => {
-    const items = section.items
-      .map((item, order) => {
-        const keys = item.keys ?? getDisplayShortcutKeys(item.actionId);
-        const label = item.backgroundValue === undefined
-          ? translatedActionLabels[item.actionId] ?? shortcutMessages.actions[getShortcutActionLabelKey(item)]
-          : `${localeMsg.value.settings.image_view.view_background}: ${localeMsg.value.settings.image_view.view_background_options[item.backgroundValue]}`;
-        const rows = [{ label, keys }];
-        if (item.advanceLabelKey) {
-          rows.push({
-            label: shortcutMessages.actions[item.advanceLabelKey],
-            keys: [shortcutPlatform === 'mac' ? '⇧' : 'Shift', ...keys],
-          });
-        }
-        return { actionId: item.actionId, rows, order };
-      })
-      .filter((item) => item.rows[0].keys.length > 0);
-    return {
-      key: section.key,
-      title: shortcutMessages.sections[section.key],
-      items,
-      columns: [
-        items.filter((_, index) => index % 2 === 0),
-        items.filter((_, index) => index % 2 === 1),
-      ],
-    };
-  });
-});
+const recordingShortcut = ref<string | null>(null);
+const shortcutFeedback = ref<{ id: string; message: string } | null>(null);
 
-function getShortcutActionLabelKey(item: ShortcutDisplayItem): string {
-  if (item.actionId === 'file.reveal' && shortcutPlatform === 'mac') {
-    return 'reveal_in_finder';
+const shortcutSections = computed(() => shortcutDisplaySections.map((section) => ({
+  key: section.key,
+  title: t(`settings.shortcuts.sections.${section.key}`),
+  items: section.items.map((item) => ({
+    id: `shortcut-${section.key}-${item.actionId}`,
+    actionId: item.actionId,
+    label: getShortcutActionLabel(item),
+    keys: getDisplayShortcutKeys(item.actionId),
+    advanceLabel: item.advanceLabelKey ? t(`settings.shortcuts.actions.${item.advanceLabelKey}`) : '',
+    advanceKeys: item.advanceLabelKey
+      ? splitShortcutLabel(getShortcutAdvanceLabels(item.actionId, shortcutPlatform, config.shortcutBindings)[0] ?? '')
+      : [],
+    editable: isShortcutEditable(item.actionId, shortcutPlatform),
+    customized: hasShortcutOverride(item.actionId, shortcutPlatform, config.shortcutBindings),
+  })),
+})));
+
+const hasCustomShortcuts = computed(() =>
+  shortcutSections.value.some((section) => section.items.some((item) => item.customized)),
+);
+
+function getShortcutActionLabel(item: ShortcutDisplayItem): string {
+  if (item.actionId === 'meta.edit') return t('file_info.edit_metadata');
+  if (item.actionId === 'view.toggleFullscreen') return t('image_viewer.toolbar.fullscreen');
+  if (item.actionId === 'file.reveal' && shortcutPlatform === 'mac') return t('settings.shortcuts.actions.reveal_in_finder');
+  return t(item.labelKey.includes('.') ? item.labelKey : `settings.shortcuts.actions.${item.labelKey}`);
+}
+
+function shortcutConflictLabel(actionId: ShortcutActionId): string {
+  for (const section of shortcutSections.value) {
+    const item = section.items.find((item) => item.actionId === actionId);
+    if (item) return item.label;
   }
-  return item.labelKey;
+  return actionId;
+}
+
+function toggleShortcutCapture(id: string, event: MouseEvent) {
+  shortcutFeedback.value = null;
+  if (recordingShortcut.value === id) {
+    recordingShortcut.value = null;
+    return;
+  }
+  (event.currentTarget as HTMLButtonElement).focus();
+  recordingShortcut.value = id;
+}
+
+function cancelShortcutCapture(id: string) {
+  if (recordingShortcut.value !== id) return;
+  recordingShortcut.value = null;
+  shortcutFeedback.value = null;
+}
+
+function recordShortcutKey(id: string, actionId: ShortcutActionId, event: KeyboardEvent) {
+  if (recordingShortcut.value !== id) {
+    if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
+    return;
+  }
+  event.stopImmediatePropagation();
+  if (event.key === 'Tab') {
+    cancelShortcutCapture(id);
+    return;
+  }
+  event.preventDefault();
+  if (event.key === 'Escape' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+    cancelShortcutCapture(id);
+    return;
+  }
+  if (event.repeat || event.isComposing || ['Control', 'Meta', 'Alt', 'Shift', 'AltGraph'].includes(event.key)) return;
+  const binding = captureShortcut(event, shortcutPlatform);
+  if (!binding) {
+    shortcutFeedback.value = { id, message: t('settings.shortcuts.unavailable') };
+    return;
+  }
+  const conflict = findShortcutConflict(actionId, binding, shortcutPlatform, config.shortcutBindings);
+  if (conflict) {
+    shortcutFeedback.value = {
+      id,
+      message: t('settings.shortcuts.conflict', { action: shortcutConflictLabel(conflict) }),
+    };
+    return;
+  }
+  config.setShortcutBinding(actionId, shortcutPlatform, binding);
+  cancelShortcutCapture(id);
+}
+
+function resetShortcut(id: string, actionId: ShortcutActionId) {
+  const conflict = findShortcutResetConflict(actionId, shortcutPlatform, config.shortcutBindings);
+  if (conflict) {
+    shortcutFeedback.value = {
+      id,
+      message: t('settings.shortcuts.reset_conflict', { action: shortcutConflictLabel(conflict) }),
+    };
+    return;
+  }
+  shortcutFeedback.value = null;
+  document.getElementById(id)?.focus();
+  config.resetShortcutBinding(actionId, shortcutPlatform);
+}
+
+function resetAllShortcuts() {
+  recordingShortcut.value = null;
+  shortcutFeedback.value = null;
+  config.resetShortcutBindings(shortcutPlatform);
 }
 
 function getDisplayShortcutKeys(actionId: ShortcutActionId): string[] {
-  const labels = getShortcutLabels(actionId, shortcutPlatform);
+  const labels = getShortcutLabels(actionId, shortcutPlatform, config.shortcutBindings);
   const label = getPreferredShortcutLabel(actionId, labels);
   return splitShortcutLabel(label);
 }
@@ -1421,6 +1561,7 @@ function getPreferredShortcutLabel(actionId: ShortcutActionId, labels: string[])
 
 function splitShortcutLabel(label: string): string[] {
   if (!label) return [];
+  if (label === '+') return ['+'];
   if (shortcutPlatform === 'mac') {
     return splitMacShortcutLabel(label);
   }
@@ -1630,6 +1771,10 @@ onUnmounted(() => {
 
 // general settings
 watch(() => config.settings.tabIndex, (newValue) => {
+  if (newValue !== SETTINGS_TAB.SHORTCUTS) {
+    recordingShortcut.value = null;
+    shortcutFeedback.value = null;
+  }
   emit('settings-settingsTabIndex-changed', newValue);
 });
 watch(() => config.settings.appearance, (newValue) => {
@@ -1775,6 +1920,7 @@ function handleKeyDown(event: KeyboardEvent) {
     if (event.key === 'Tab' && cleanupRunning.value) event.preventDefault();
     return;
   }
+  if (event.key === 'Tab' && config.settings.tabIndex === SETTINGS_TAB.SHORTCUTS) return;
   const navigationKeys = ['Tab', 'Escape'];
 
   // Disable default behavior for certain keys

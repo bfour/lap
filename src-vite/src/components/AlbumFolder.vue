@@ -450,7 +450,7 @@ const getMenuItemsForFolder = async (folder: any) => {
     {
       label: t('menu.file.paste'),
       icon: IconClipboard,
-      shortcut: getShortcutLabel('file.paste', DEFAULT_PLATFORM),
+      shortcut: getShortcutLabel('file.paste', DEFAULT_PLATFORM, config.shortcutBindings),
       disabled: unavailable || !canPaste,
       action: () => {
         void tauriEmit('paste-clipboard-to-folder', {

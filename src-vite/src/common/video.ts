@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { matchesShortcut, type ShortcutPlatform } from './shortcuts';
+import { matchesShortcut, type ShortcutOverrides, type ShortcutPlatform } from './shortcuts';
 
 export function handleVideoEscapeShortcut(event: KeyboardEvent, platform: ShortcutPlatform, closePreview: () => void) {
   if (event.defaultPrevented || !matchesShortcut('view.close', event, platform)) return;
@@ -14,14 +14,20 @@ export function handleVideoEscapeShortcut(event: KeyboardEvent, platform: Shortc
   event.stopPropagation();
 }
 
-export function handleVideoPlaybackShortcut(event: KeyboardEvent, platform: ShortcutPlatform, togglePlay: () => void) {
-  if (!matchesShortcut('view.togglePlayback', event, platform)) return;
+export function handleVideoPlaybackShortcut(
+  event: KeyboardEvent,
+  platform: ShortcutPlatform,
+  performAction: () => void,
+  overrides?: ShortcutOverrides,
+  actionId: 'view.togglePlayback' | 'view.quickPreview' = 'view.togglePlayback',
+) {
+  if (event.defaultPrevented || event.isComposing || !matchesShortcut(actionId, event, platform, overrides)) return;
   const target = event.target as HTMLElement | null;
-  if (target?.closest?.('input, textarea, [contenteditable]:not([contenteditable="false"])')) return;
+  if (target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
   // Intercept before video.js controls, so one press performs one action.
   event.preventDefault();
   event.stopPropagation();
-  if (!event.repeat) togglePlay();
+  if (!event.repeat) performAction();
 }
 
 export interface VideoPrepareResult {
