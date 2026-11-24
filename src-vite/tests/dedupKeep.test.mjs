@@ -139,6 +139,25 @@ test('a protected keep issues no update and a library change discards an outstan
   assert.equal(f.rawGroups.value[0].items[1].is_keep, 0);
 });
 
+test('folder priority can target ancestors up to the album root', () => {
+  const utilities = fs.readFileSync(new URL('../src/common/utils.ts', import.meta.url), 'utf8');
+  const pathHelpers = utilities.slice(utilities.indexOf('export function getFolderPath('),
+    utilities.indexOf('export function buildFolderBreadcrumbs(')).replace(/^export /gm, '');
+  const folderChoices = source.slice(source.indexOf('function folderAndAncestorPaths('),
+    source.indexOf('function openKeepRules('));
+  const choicesFor = new Function('separator', ts.transpile(pathHelpers + folderChoices)
+    + '; return folderAndAncestorPaths;');
+
+  const unix = choicesFor('/');
+  assert.deepEqual(unix('/Photos/Archive/2025', '/Photos'), ['/Photos/Archive/2025', '/Photos/Archive', '/Photos']);
+  assert.deepEqual(unix('/Photos backup/Archive', '/Photos'), ['/Photos backup/Archive']);
+  assert.deepEqual(unix('/Photos/Archive', '/'), ['/Photos/Archive', '/Photos', '/']);
+  assert.deepEqual(unix('/Photos', '/Photos'), ['/Photos']);
+
+  const windows = choicesFor('\\');
+  assert.deepEqual(windows('C:\\Photos\\Archive', 'c:\\'), ['C:\\Photos\\Archive', 'C:\\Photos', 'c:\\']);
+});
+
 test('Dedup navigation selects a standalone JPEG or falls back to its visible RAW', async () => {
   const content = fs.readFileSync(new URL('../src/components/Content.vue', import.meta.url), 'utf8');
   const start = content.indexOf('async function resolveFileIndexForDedup(');

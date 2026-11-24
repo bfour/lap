@@ -31,6 +31,7 @@ if (!db.tagNames.includes("Outdoors") && !db.tagNames.includes(null)) {
 let libraryState = db.libraryState || null,
   dedupScanned = false,
   similarScanned = false;
+let dedupPreferredPaths = [];
 let thumbnailCacheLocation = { path: "/Browser/Lap Demo/Cache", custom: false };
 const thumbnailCacheMigrations = new Map();
 const similarKeeps = new Map(),
@@ -374,6 +375,12 @@ function grouped(list, params = {}) {
     totalSize: list.reduce((s, f) => s + f.size, 0),
   };
 }
+function duplicateFolderRank(file) {
+  const path = folderPath(file.folder);
+  const rank = dedupPreferredPaths.findIndex(preferred => path === preferred || path.startsWith(preferred + "/"));
+  return rank < 0 ? Infinity : rank;
+}
+
 function groups(similar = false) {
   const map = new Map();
   for (const p of live()) {
@@ -402,7 +409,12 @@ function groups(similar = false) {
         : db.duplicateKeeps[groupId] ?? [];
       const keepIds = new Set(savedKeeps.filter((id) => g.some((file) => file.id === id)));
       const reviewed = keepIds.size > 0;
-      if (!reviewed) keepIds.add(g[0].id);
+      if (!reviewed) {
+        const keep = similar ? g[0] : g.reduce((best, file) =>
+          duplicateFolderRank(file) < duplicateFolderRank(best) ? file : best,
+        );
+        keepIds.add(keep.id);
+      }
       return {
         id: groupId,
         hash: g[0].hash || "sample",
@@ -726,6 +738,18 @@ export async function invoke(command, args = {}) {
   if (command === "select_folder") {
     const f = db.folders.find((f) => folderPath(f.id) === args.folderPath);
     if (f) return nativeFolder(f);
+    const album = db.albums.find((a) => a.id === args.albumId);
+    if (album && args.folderPath.startsWith(album.path + "/")
+      && db.folders.some((f) => f.album === album.id && folderPath(f.id).startsWith(args.folderPath + "/"))) {
+      const parent = {
+        id: Math.max(0, ...db.folders.map((f) => f.id)) + 1,
+        album: album.id,
+        name: args.folderPath.slice(album.path.length + 1),
+      };
+      db.folders.push(parent);
+      save();
+      return nativeFolder(parent);
+    }
     const a = db.albums.find((a) => a.path === args.folderPath) || db.albums[0];
     return {
       id: 1000 + a.id,
@@ -1269,6 +1293,11 @@ export async function invoke(command, args = {}) {
       : [];
   if (command === "is_face_indexing") return [false, 0];
   if (command === "dedup_start_scan") {
+    dedupPreferredPaths = (args.keepRules?.folderIds ?? []).map(id =>
+      db.folders.some((f) => f.id === id)
+        ? folderPath(id)
+        : db.albums.find((a) => 1000 + a.id === id)?.path,
+    ).filter(Boolean);
     dedupScanned = true;
     queueMicrotask(() =>
       emit("dedup-scan-progress", {

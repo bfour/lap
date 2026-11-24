@@ -11,6 +11,30 @@
               <span class="text-xs text-base-content/30">{{ $t('info_panel.dedup.keep_rules.subfolders') }}</span>
             </span>
           </div>
+          <div v-if="photoFolder" class="flex flex-wrap items-end gap-2">
+            <label class="flex min-w-0 flex-1 flex-col gap-1 text-xs text-base-content/70">
+              {{ $t('info_panel.dedup.keep_rules.folder_to_prioritize') }}
+              <select
+                v-model="photoFolderPath"
+                class="select select-bordered select-sm w-full"
+                :disabled="prioritizingFolder"
+                :title="photoFolderPath"
+              >
+                <option v-for="path in photoFolder.paths" :key="path" :value="path">{{ path }}</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              class="t-button-default shrink-0"
+              :disabled="!canPrioritizeFolder"
+              @click="prioritizeFolder"
+            >
+              {{ $t(photoFolderIsFirst ? 'info_panel.dedup.keep_rules.top_priority' : 'info_panel.dedup.keep_rules.set_top_priority') }}
+            </button>
+          </div>
+          <p v-if="priorityFailed" class="px-1 text-xs text-error" role="alert">
+            {{ $t('msgbox.select_folder.error') }}
+          </p>
           <div class="rounded-box border border-base-content/10 text-sm">
             <div class="relative flex shrink-0 items-center px-2 py-2 pr-9">
               <span class="min-w-0 flex-1 truncate font-bold uppercase text-[10px] tracking-widest text-base-content/30">
@@ -21,7 +45,7 @@
                   :icon="IconAdd"
                   buttonSize="small"
                   :tooltip="$t('info_panel.dedup.keep_rules.add_folder')"
-                  :disabled="!folderPathsReady"
+                  :disabled="!folderPathsReady || prioritizingFolder"
                   @click="showFolderPicker = true"
                 />
               </div>
@@ -122,8 +146,18 @@
         </label>
       </section>
     </div>
-    <div class="flex justify-end gap-2 pt-4 select-none">
-      <button class="t-button-primary" @click="emit('cancel')">{{ $t('msgbox.close') }}</button>
+    <div class="space-y-2 pt-4 select-none">
+      <p v-if="canRescan" class="text-xs text-base-content/60">
+        {{ $t('info_panel.dedup.keep_rules.rescan_hint') }}
+      </p>
+      <div class="flex flex-wrap justify-end gap-2">
+        <button type="button" :class="canRescan ? 't-button-default' : 't-button-primary'" @click="emit('cancel')">
+          {{ $t('msgbox.close') }}
+        </button>
+        <button v-if="canRescan" type="button" class="t-button-primary" :disabled="prioritizingFolder || !folderPathsReady" @click="emit('rescan')">
+          {{ $t('info_panel.dedup.keep_rules.rescan_with_rules') }}
+        </button>
+      </div>
     </div>
   </ModalDialog>
   <PreferredFolderDialog
@@ -136,15 +170,20 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { VueDraggable } from 'vue-draggable-plus';
-import { getAllAlbumFoldersIncludingExcluded } from '@/common/api';
+import { getAllAlbumFoldersIncludingExcluded, selectFolder } from '@/common/api';
 import { config, libConfig } from '@/common/config';
 import { IconAdd, IconDragHandle, IconFolder, IconTrash } from '@/common/icons';
+import { normalizePathForCompare } from '@/common/utils';
 import { useUIStore } from '@/stores/uiStore';
 import ModalDialog from './ModalDialog.vue';
 import PreferredFolderDialog from './PreferredFolderDialog.vue';
 import TButton from './TButton.vue';
 
-const emit = defineEmits<{ cancel: [] }>();
+const props = defineProps<{
+  photoFolder?: { albumId: number; paths: string[] } | null;
+  canRescan?: boolean;
+}>();
+const emit = defineEmits<{ cancel: []; rescan: [] }>();
 const uiStore = useUIStore();
 const rules = computed(() => config.dedup.keepRules);
 const showFolderPicker = ref(false);
@@ -156,7 +195,19 @@ const preferredFolderIds = computed<number[]>({
   get: () => libConfig.dedupPreferredFolderIds,
   set: ids => { libConfig.dedupPreferredFolderIds = ids; },
 });
+const photoFolderPath = ref(props.photoFolder?.paths[0] ?? '');
+const prioritizingFolder = ref(false);
+const priorityFailed = ref(false);
+const photoFolderIsFirst = computed(() => {
+  const firstPath = folderPaths.value.get(preferredFolderIds.value[0]);
+  return !!firstPath && normalizePathForCompare(firstPath) === normalizePathForCompare(photoFolderPath.value);
+});
+const canPrioritizeFolder = computed(() => folderPathsReady.value && !!photoFolderPath.value
+  && !photoFolderIsFirst.value && !prioritizingFolder.value);
 const folderActionVisibility = 'opacity-0 pointer-events-none group-hover/preferred-folder:opacity-100 group-hover/preferred-folder:pointer-events-auto group-focus-within/preferred-folder:opacity-100 group-focus-within/preferred-folder:pointer-events-auto';
+let disposed = false;
+
+watch(photoFolderPath, () => { priorityFailed.value = false; });
 
 watch([() => libConfig._libraryId, () => libConfig._initialized], async ([libraryId, initialized], _, onCleanup) => {
   selectedFolder.value = null;
@@ -203,9 +254,42 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
   window.removeEventListener('keydown', handleKeyDown);
   uiStore.removeInputHandler('DedupSettings');
 });
+
+async function prioritizeFolder() {
+  const source = props.photoFolder;
+  const path = photoFolderPath.value;
+  if (!canPrioritizeFolder.value || !source?.paths.includes(path)) return;
+
+  const libraryId = libConfig._libraryId;
+  prioritizingFolder.value = true;
+  priorityFailed.value = false;
+  try {
+    const pathKey = normalizePathForCompare(path);
+    const existing = preferredFolderIds.value.find(id => {
+      const existingPath = folderPaths.value.get(id);
+      return !!existingPath && normalizePathForCompare(existingPath) === pathKey;
+    });
+    let id = existing;
+    if (!id) {
+      const folder = await selectFolder(source.albumId, path);
+      if (disposed || libraryId !== libConfig._libraryId) return;
+      if (!(folder?.id > 0) || !folder.path || Number(folder.album_id) !== source.albumId || normalizePathForCompare(folder.path) !== pathKey) {
+        priorityFailed.value = true;
+        return;
+      }
+      id = Number(folder.id);
+      folderPaths.value.set(id, folder.path);
+    }
+    preferredFolderIds.value = [id, ...preferredFolderIds.value.filter(folderId => folderId !== id)];
+    selectedFolder.value = id;
+  } finally {
+    prioritizingFolder.value = false;
+  }
+}
 
 function addFolder(folder: { id: number; path: string }) {
   folderPaths.value.set(folder.id, folder.path);
