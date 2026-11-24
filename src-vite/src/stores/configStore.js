@@ -47,6 +47,7 @@ export const useConfigStore = defineStore('configStore', {
       keepRules: { preferFormat: 'raw', preferredDate: 'modifiedEarliest', preferredSize: 'largestDimensions' },
       activeTab: 'duplicates',   // active dedup tab ('duplicates' | 'similar')
       duplicateSetsHeight: 50,   // duplicate sets section height as a percentage
+      groupSort: 'count_desc',   // duplicate set order ('count_desc' | 'size_desc' | 'size_asc' | 'reclaimable_desc')
     },
 
     infoPanel: {

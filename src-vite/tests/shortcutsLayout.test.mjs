@@ -17,7 +17,7 @@ new Function(
 )(exports);
 const {
   captureShortcut, findShortcutConflict, findShortcutMatches, findShortcutResetConflict,
-  getShortcutAdvanceLabels, getShortcutLabel, isShortcutEditable, matchesShortcut,
+  getShortcutAdvanceLabels, getShortcutLabel, isDedupPaneShortcut, isShortcutEditable, matchesShortcut,
   normalizeShortcutOverrides, shouldAdvanceShortcut,
 } = exports;
 
@@ -54,6 +54,31 @@ test("trash and permanent delete use distinct bindings", () => {
     assert.equal(matchesShortcut("file.trash", permanent, platform), false);
     assert.equal(matchesShortcut("file.deletePermanently", permanent, platform), true);
   }
+});
+
+test("duplicate shortcuts match only in the Duplicates context", () => {
+  const lock = event({ key: "l", code: "KeyL" });
+  for (const platform of ["linux", "windows", "mac"]) {
+    const deletion = platform === "mac" ? cmd("Backspace", "Backspace") : event({ key: "Delete", code: "Delete" });
+    assert.deepEqual(findShortcutMatches("dedup", lock, platform), ["dedup.toggleKeep"]);
+    assert.deepEqual(findShortcutMatches("content", lock, platform), []);
+    assert.deepEqual(findShortcutMatches("dedup", deletion, platform), ["dedup.deleteSelected"]);
+    assert.deepEqual(findShortcutMatches("content", deletion, platform), ["file.trash"]);
+    assert.deepEqual(findShortcutMatches("dedup", { ...deletion, shiftKey: true }, platform), ["dedup.deleteSet"]);
+  }
+});
+
+test("duplicate shortcuts are editable and the focused pane claims them", () => {
+  const deletion = captureShortcut(event({ key: "Delete", code: "Delete" }), "linux");
+  assert.equal(isShortcutEditable("dedup.toggleKeep", "linux"), true);
+  assert.equal(isShortcutEditable("dedup.deleteSet", "mac"), true);
+  assert.equal(findShortcutConflict("dedup.toggleKeep", deletion, "linux"), "dedup.deleteSelected");
+  const inPane = { closest: (selector) => (selector === "[data-dedup-shortcuts]" ? {} : null) };
+  const outside = { closest: () => null };
+  assert.equal(isDedupPaneShortcut({ ...event({ key: "l", code: "KeyL" }), target: inPane }, "linux"), true);
+  assert.equal(isDedupPaneShortcut({ ...event({ key: "ArrowDown" }), target: inPane }, "linux"), true);
+  assert.equal(isDedupPaneShortcut({ ...event({ key: "b", code: "KeyB", ctrlKey: true }), target: inPane }, "linux"), false);
+  assert.equal(isDedupPaneShortcut({ ...event({ key: "Delete" }), target: outside }, "linux"), false);
 });
 
 test("QWERTY: Cmd-A selects all", () => {

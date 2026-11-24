@@ -79,8 +79,11 @@ test('actual move and search/type constraints combine', async () => {
 });
 test('actual dedup keep choice controls deletion and remaining groups', async () => {
   const a = await adapter();
-  await a.invoke('dedup_set_keep', { groupId: 8, fileId: 20 });
+  await a.invoke('dedup_set_keep', { groupId: 8, fileId: 20, keep: true });
+  assert.equal(a.demoBackend.groups()[0].items.filter(i => i.is_keep).length, 2);
+  await a.invoke('dedup_set_keep', { groupId: 8, fileId: 8, keep: false });
   assert.equal(a.demoBackend.groups()[0].items.find(i => i.file_id === 20).is_keep, 1);
+  await assert.rejects(a.invoke('dedup_set_keep', { groupId: 8, fileId: 20, keep: false }));
   const { preview } = await a.invoke('dedup_delete', { request: { preview: true } });
   assert.equal(preview.fileCount, 2);
   assert.equal(a.demoBackend.query().length, 20);

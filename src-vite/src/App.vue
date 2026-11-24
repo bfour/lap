@@ -19,7 +19,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { clearIndexRecoveryInfo } from '@/common/api';
 import { isMac, SCALE_VALUES } from '@/common/utils';
 import { useAppTheme } from '@/composables/useAppearance';
-import { DEFAULT_PLATFORM, hasShortcutOverride, matchesShortcut } from '@/common/shortcuts';
+import { DEFAULT_PLATFORM, hasShortcutOverride, isDedupPaneShortcut, matchesShortcut } from '@/common/shortcuts';
 import ToastContainer from '@/components/ToastContainer.vue';
 
 const libConfig = useLibraryStore();
@@ -165,6 +165,9 @@ const handleKeyDown = (event) => {
     emit('app-open-preferences');
     return;
   }
+
+  // The focused Duplicates pane owns its shortcuts, including Delete.
+  if (isDedupPaneShortcut(event, DEFAULT_PLATFORM, config.shortcutBindings)) return;
 
   // Inputs that handle their own keys must not trigger global shortcuts (Enter is file.rename on
   // macOS). SearchBox/MoveTo/ImportOrganize are deliberately excluded — they rely on this channel.

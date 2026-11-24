@@ -6,66 +6,78 @@ import { ref } from 'vue';
 
 const source = fs.readFileSync(new URL('../src/components/DedupPane.vue', import.meta.url), 'utf8');
 const start = source.indexOf('async function setKeep(');
-const end = source.indexOf('async function setSimilarKeep(', start);
+const end = source.indexOf('function duplicateActionTitle(', start);
 assert.ok(start >= 0 && end > start);
-const navigation = source.slice(source.indexOf('function handleDuplicateSelection('), source.indexOf('function handleSimilarSelection('));
-const code = ts.transpile(navigation + source.slice(start, end), { target: ts.ScriptTarget.ES2022 });
+const selection = source.slice(
+  source.indexOf('function canSelectForDeletion('),
+  source.indexOf('function isDupSelected('),
+);
+const code = ts.transpile(selection + source.slice(start, end), { target: ts.ScriptTarget.ES2022 });
 
-function keepFixture(detail) {
-  const calls = [];
-  const selected = new Set();
-  const rawGroups = ref([{
-    id: 7,
-    items: [
-      { file_id: 1, is_keep: 1, can_delete: false, file: { id: 1, name: 'keep.raw' } },
-      { file_id: 2, is_keep: 0, can_delete: true, file: { id: 2, name: 'next.raw' } },
-    ],
-  }]);
-  const setKeep = new Function(
-    'dedupSetKeep', 'dedupGetGroupItems', 'rawGroups', 'getDupSelectedSet',
-    'emitDedupStatuses', 'refreshOverview', 'emit', 'canSelectForDeletion',
-    `${code}; return setKeep;`,
-  )(
-    async (groupId, fileId) => calls.push(['setKeep', groupId, fileId]),
-    async () => detail,
-    rawGroups,
-    () => selected,
-    () => calls.push(['statuses']),
-    () => calls.push(['overview']),
-    (...args) => calls.push(['emit', ...args]),
-    item => item?.can_delete === true,
-  );
-  return { calls, selected, rawGroups, setKeep };
+function item(id, keep = false, overrides = {}) {
+  return { file_id: id, is_keep: Number(keep), can_delete: !keep, can_set_keep: true, file: { id, name: `copy-${id}.jpg` }, ...overrides };
 }
 
-test('setKeep refreshes can_delete from the backend group state', async () => {
-  const detail = [
-    { file_id: 1, is_keep: 0, can_delete: true, file: { id: 1, name: 'keep.raw' } },
-    { file_id: 2, is_keep: 1, can_delete: false, file: { id: 2, name: 'next.raw' } },
-  ];
-  const f = keepFixture(detail);
-  await f.setKeep(7, 2);
+function keepFixture(items, detail, { save = async () => {} } = {}) {
+  const calls = [];
+  const selections = new Map([[7, new Set()]]);
+  const rawGroups = ref([{ id: 7, items }]);
+  const toast = { error: message => calls.push(['toast', message]) };
+  const setKeep = new Function(
+    'dedupSetKeep', 'dedupGetGroupItems', 'rawGroups', 'selectedDupIdsByGroup', 'isOriginalUnavailable',
+    'emitDedupStatuses', 'refreshOverview', 'isChangingDuplicateKeep', 'duplicateAccessPending', 'toast', 't',
+    `${code}; return setKeep;`,
+  )(
+    async (...args) => { calls.push(['setKeep', ...args]); await save(); },
+    async () => (typeof detail === 'function' ? detail() : detail),
+    rawGroups,
+    ref(selections),
+    file => file?.unavailable === true,
+    () => calls.push(['statuses']),
+    () => calls.push(['overview']),
+    ref(false),
+    ref(false),
+    toast,
+    key => key,
+  );
+  return { calls, rawGroups, setKeep, selected: () => Array.from(selections.get(7)).sort() };
+}
 
-  assert.deepEqual(f.calls[0], ['setKeep', 7, 2]);
-  assert.deepEqual(f.calls[1], ['statuses']);
-  assert.deepEqual(f.calls[2], ['overview']);
-  assert.deepEqual(f.calls[3], ['emit', 'select-file', 2, undefined]);
-  assert.equal(f.selected.has(1), true);
-  assert.equal(f.selected.has(2), false);
-  const items = f.rawGroups.value[0].items;
-  assert.equal(items.find(item => item.file_id === 1).can_delete, true);
-  assert.equal(items.find(item => item.file_id === 2).can_delete, false);
-  assert.equal(items.find(item => item.file_id === 1).file.name, 'keep.raw');
+test('locking another copy keeps both locked and checks every other unlocked copy', async () => {
+  const f = keepFixture([item(1, true), item(2), item(3)], [item(1, true), item(2, true), item(3)]);
+  await f.setKeep(7, 2);
+  assert.deepEqual(f.calls[0], ['setKeep', 7, 2, true]);
+  assert.deepEqual(f.rawGroups.value[0].items.map(row => [row.file_id, row.is_keep]), [[1, 1], [2, 1], [3, 0]]);
+  assert.deepEqual(f.selected(), [3]);
 });
 
-test('switching Keep does not select a protected former keep for deletion', async () => {
-  const f = keepFixture([
-    { file_id: 1, is_keep: 0, can_delete: false },
-    { file_id: 2, is_keep: 1, can_delete: false, raw_pair_primary_id: 10 },
+test('unlocking a copy checks it for deletion, recomputing the whole set', async () => {
+  const f = keepFixture([item(1, true), item(2, true), item(3)], [item(1), item(2, true), item(3)]);
+  await f.setKeep(7, 1);
+  assert.deepEqual(f.calls[0], ['setKeep', 7, 1, false]);
+  assert.deepEqual(f.selected(), [1, 3]);
+});
+
+test('protected or unavailable unlocked copies stay unchecked and rows keep their order', async () => {
+  const f = keepFixture([item(3, false, { file: { unavailable: true } }), item(1, true), item(2, true)], [
+    item(1, true), item(2, false, { can_delete: false }), item(3), item(4),
   ]);
   await f.setKeep(7, 2);
-  assert.equal(f.selected.size, 0);
-  assert.deepEqual(f.calls.at(-1), ['emit', 'select-file', 2, 10]);
+  assert.deepEqual(f.rawGroups.value[0].items.map(row => row.file_id), [3, 1, 2, 4]);
+  assert.deepEqual(f.selected(), [4]);
+});
+
+test('the last locked copy cannot be unlocked', async () => {
+  const f = keepFixture([item(1, true, { can_set_keep: false }), item(2)], []);
+  await f.setKeep(7, 1);
+  assert.deepEqual(f.calls, []);
+});
+
+test('a failed lock change reports an error and leaves the set unchanged', async () => {
+  const f = keepFixture([item(1, true), item(2)], [], { save: async () => { throw new Error('locked'); } });
+  await f.setKeep(7, 2);
+  assert.deepEqual(f.calls.at(-1), ['toast', 'info_panel.dedup.keep_update_failed']);
+  assert.deepEqual(f.rawGroups.value[0].items.map(row => row.is_keep), [1, 0]);
 });
 
 test('Dedup navigation selects a standalone JPEG or falls back to its visible RAW', async () => {
