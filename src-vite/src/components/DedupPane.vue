@@ -314,7 +314,7 @@
         </div>
       </div>
 
-      <div v-else-if="duplicateGroups.length === 0" class="p-4 flex-1 flex items-center justify-center">
+      <div v-else-if="allDuplicateGroups.length === 0" class="p-4 flex-1 flex items-center justify-center">
         <div class="text-center text-base-content/30 space-y-3 max-w-65">
           <p class="text-sm">{{ $t('info_panel.dedup.empty_title') }}</p>
           <!-- <p class="text-xs">{{ $t('info_panel.dedup.empty_desc') }}</p> -->
@@ -351,11 +351,26 @@
         >
           <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span class="text-[10px] uppercase tracking-widest font-bold text-base-content/30">
-              {{ $t('info_panel.dedup.groups_title') }}
+              {{ $t(showHiddenGroups ? 'info_panel.dedup.hidden_groups_title' : 'info_panel.dedup.groups_title') }}
             </span>
             <span class="sidebar-item-count">
-              {{ totalGroupCount.toLocaleString() }}
+              {{ (showHiddenGroups ? hiddenGroupCount : totalGroupCount).toLocaleString() }}
             </span>
+            <button
+              v-if="showHiddenGroups || hiddenGroupCount > 0"
+              type="button"
+              class="btn btn-ghost btn-xs gap-1 px-1 font-normal text-base-content/60"
+              :class="{ 'text-primary': showHiddenGroups }"
+              :aria-pressed="showHiddenGroups"
+              :disabled="duplicateActionsBusy"
+              :title="$t(showHiddenGroups ? 'info_panel.dedup.back_to_sets' : 'info_panel.dedup.hidden_sets_title')"
+              @click="toggleHiddenGroupsView"
+            >
+              <component :is="showHiddenGroups ? IconUnhide : IconHide" class="size-3.5" aria-hidden="true" />
+              {{ showHiddenGroups
+                ? $t('info_panel.dedup.back_to_sets')
+                : $t('info_panel.dedup.hidden_sets', { count: hiddenGroupCount.toLocaleString() }) }}
+            </button>
             <select
               v-model="duplicateGroupSort"
               class="select select-xs ml-auto w-auto max-w-full"
@@ -376,6 +391,9 @@
             class="min-h-0 flex-1 overflow-y-auto py-1"
             @scroll="loadMoreDuplicateThumbnails"
           >
+            <p v-if="duplicateGroups.length === 0" class="px-2 py-4 text-center text-xs text-base-content/40" role="status">
+              {{ $t(showHiddenGroups ? 'info_panel.dedup.hidden_empty' : 'info_panel.dedup.all_sets_hidden') }}
+            </p>
             <div class="mx-2 grid grid-cols-[repeat(auto-fill,minmax(5rem,1fr))] gap-2">
               <button
               v-for="group in visibleDuplicateGroups"
@@ -433,15 +451,23 @@
 
           <div class="flex flex-wrap gap-1">
             <PanelActionButton
+              :icon="activeGroup.hidden ? IconUnhide : IconHide"
+              :disabled="duplicateActionsBusy"
+              :title="activeGroup.hidden ? undefined : $t('info_panel.dedup.hide_set_title')"
+              @click="setGroupHidden(activeGroup.id, !activeGroup.hidden)"
+            >
+              {{ $t(activeGroup.hidden ? 'info_panel.dedup.unhide_set' : 'info_panel.dedup.hide_set') }}
+            </PanelActionButton>
+            <PanelActionButton
               :icon="isAllGroupDuplicatesSelected(activeGroup.id) ? IconDeselect : IconSelectAll"
-              :disabled="duplicateActionsBusy || !activeGroup.duplicateItems.some(canSelectForDeletion)"
+              :disabled="duplicateActionsBusy || activeGroup.hidden || !activeGroup.duplicateItems.some(canSelectForDeletion)"
               @click="selectGroupDuplicates(activeGroup.id)"
             >
               {{ isAllGroupDuplicatesSelected(activeGroup.id) ? $t('menu.select.none') : $t('menu.select.all') }}
             </PanelActionButton>
             <PanelActionButton
               :icon="IconTrash"
-              :disabled="selectedDeleteCount === 0 || duplicateActionsBusy"
+              :disabled="selectedDeleteCount === 0 || duplicateActionsBusy || activeGroup.hidden"
               :title="duplicateActionTitle(checkedDeleteLabel, 'dedup.deleteSelected')"
               danger
               @click="trashSelectedDuplicates(activeGroup.id)"
@@ -450,7 +476,7 @@
             </PanelActionButton>
             <PanelActionButton
               :icon="IconTrash"
-              :disabled="!activeGroup.duplicateItems.some(canSelectForDeletion) || duplicateActionsBusy"
+              :disabled="!activeGroup.duplicateItems.some(canSelectForDeletion) || duplicateActionsBusy || activeGroup.hidden"
               :title="duplicateActionTitle(setDeleteLabel, 'dedup.deleteSet')"
               danger
               @click="trashSetDuplicates(activeGroup.id)"
@@ -458,7 +484,10 @@
               {{ setDeleteLabel }}
             </PanelActionButton>
           </div>
-          <p class="px-1 text-[11px] text-base-content/40">
+          <p v-if="activeGroup.hidden" class="px-1 text-xs text-base-content/50" role="status">
+            {{ $t('info_panel.dedup.hidden_set_notice') }}
+          </p>
+          <p v-else class="px-1 text-[11px] text-base-content/40">
             {{ $t('info_panel.dedup.keep_hint') }}
           </p>
           <TransitionGroup
@@ -488,7 +517,7 @@
                     class="checkbox checkbox-xs disabled:cursor-not-allowed"
                     :class="!canSelectForDeletion(item) ? 'opacity-30' : 'checkbox-primary opacity-70'"
                     :checked="isDupSelected(activeGroup.id, item.file_id)"
-                    :disabled="duplicateActionsBusy || !canSelectForDeletion(item)"
+                    :disabled="duplicateActionsBusy || activeGroup.hidden || !canSelectForDeletion(item)"
                     :aria-label="$t('info_panel.dedup.select_for_deletion', { name: item.file?.name ?? '' })"
                     @change="toggleDupSelected(activeGroup.id, item.file_id)"
                   />
@@ -582,7 +611,7 @@ import DedupSettings from './DedupSettings.vue';
 import TButton from '@/components/TButton.vue';
 import PanelActionButton from '@/components/PanelActionButton.vue';
 import MessageBox from '@/components/MessageBox.vue';
-import { IconAdjustments, IconSelectAll, IconExclamation, IconDeselect, IconClose, IconFlag, IconFlagFilled, IconFlagOff, IconFolder, IconLivePhoto, IconLock, IconShield, IconRefresh, IconSplitOn, IconSplitOn4, IconTrash, IconUnlock } from '@/common/icons';
+import { IconAdjustments, IconSelectAll, IconExclamation, IconDeselect, IconClose, IconFlag, IconFlagFilled, IconFlagOff, IconFolder, IconHide, IconLivePhoto, IconLock, IconShield, IconRefresh, IconSplitOn, IconSplitOn4, IconTrash, IconUnhide, IconUnlock } from '@/common/icons';
 import { useToast } from '@/common/toast';
 import { useUIStore } from '@/stores/uiStore';
 import { DEFAULT_PLATFORM, getShortcutLabel, matchesShortcut, type ShortcutActionId } from '@/common/shortcuts';
@@ -595,6 +624,7 @@ import {
   dedupListGroups,
   dedupSetKeep,
   dedupGetGroupItems,
+  dedupSetGroupHidden,
   getAlbum,
   getFileThumb,
   checkFileAccessibility,
@@ -771,8 +801,15 @@ function decorateDuplicateGroup(group: any) {
   };
 }
 
-const duplicateGroups = computed(() =>
+// Show the sets the user skipped instead of the regular duplicate sets.
+const showHiddenGroups = ref(false);
+const isChangingHiddenGroup = ref(false);
+const hiddenGroupCount = computed(() => rawGroups.value.filter((group: any) => group.hidden).length);
+const isGroupInView = (group: any) => !!group.hidden === showHiddenGroups.value;
+
+const allDuplicateGroups = computed(() =>
   sortDuplicateGroups(rawGroups.value.map(decorateDuplicateGroup), duplicateGroupSort.value));
+const duplicateGroups = computed(() => allDuplicateGroups.value.filter(isGroupInView));
 
 const activeGroup = computed(() => {
   if (selectedGroupId.value === null) return null;
@@ -794,6 +831,7 @@ function emitDedupStatuses() {
   const statuses: Record<number, 'keep' | 'dup'> = {};
   for (const fileId of pairMatchIds.value) statuses[fileId] = 'dup';
   for (const group of rawGroups.value) {
+    if (group.hidden) continue;
     for (const item of group.items || []) {
       statuses[Number(item.file_id)] = item.is_keep === 1 ? 'keep' : 'dup';
     }
@@ -1000,7 +1038,7 @@ function handleSimilarSelection(fileId: number, preview = false) {
 
 let unlistenAlbumAccessChanged: (() => void) | undefined;
 const duplicateAccessPending = ref(false);
-const hasUnavailableDuplicates = computed(() => rawGroups.value.some((group: any) =>
+const hasUnavailableDuplicates = computed(() => rawGroups.value.some((group: any) => !group.hidden &&
   (group.items || []).some((item: any) => item.is_keep !== 1 && item.can_delete && isOriginalUnavailable(item.file))));
 
 async function refreshFileAccess(files: any[]) {
@@ -1440,14 +1478,19 @@ function isAllGroupDuplicatesSelected(groupId: number) {
   return available.length > 0 && available.every((item: any) => set.has(item.file_id));
 }
 
-const duplicateActionsBusy = computed(() => isChangingDuplicateKeep.value || duplicateAccessPending.value);
+const duplicateActionsBusy = computed(() => isChangingDuplicateKeep.value || duplicateAccessPending.value
+  || isChangingHiddenGroup.value);
 const checkedDeleteLabel = computed(() => t(config.settings.fileDeleteBehavior === 'permanent'
   ? 'info_panel.dedup.delete_checked' : 'info_panel.dedup.trash_selected'));
 const setDeleteLabel = computed(() => t(config.settings.fileDeleteBehavior === 'permanent'
   ? 'info_panel.dedup.delete_set' : 'info_panel.dedup.trash_set'));
 
+function isHiddenGroup(groupId: number) {
+  return rawGroups.value.some((group: any) => Number(group.id) === groupId && group.hidden);
+}
+
 function trashSelectedDuplicates(groupId: number) {
-  if (duplicateActionsBusy.value) return;
+  if (duplicateActionsBusy.value || isHiddenGroup(groupId)) return;
   const ids = Array.from(getDupSelectedSet(groupId).values()).filter(fileId => isDupSelected(groupId, fileId));
   if (ids.length === 0) return;
   emit('trash-selected-duplicates', String(groupId), ids);
@@ -1455,7 +1498,7 @@ function trashSelectedDuplicates(groupId: number) {
 
 /** Delete every unlocked copy in the set, whether or not it is checked. */
 function trashSetDuplicates(groupId: number) {
-  if (duplicateActionsBusy.value) return;
+  if (duplicateActionsBusy.value || isHiddenGroup(groupId)) return;
   const group = rawGroups.value.find((group: any) => Number(group.id) === groupId);
   const ids = (group?.items || []).filter(canSelectForDeletion).map((item: any) => Number(item.file_id));
   if (ids.length === 0) return;
@@ -1467,13 +1510,74 @@ async function trashAllDuplicates() {
   const libraryId = libConfig._libraryId;
   duplicateAccessPending.value = true;
   try {
-    await refreshFileAccess(rawGroups.value.flatMap((group: any) => (group.items || [])
+    await refreshFileAccess(rawGroups.value.filter((group: any) => !group.hidden).flatMap((group: any) => (group.items || [])
       .filter((item: any) => item.is_keep !== 1 && item.can_delete).map((item: any) => item.file)));
     if (libraryId !== libConfig._libraryId || hasUnavailableDuplicates.value) return;
     emit('trash-all-duplicates');
   } finally {
     duplicateAccessPending.value = false;
   }
+}
+
+// The group to select after `groupId` leaves the current list: the next one, else the previous one.
+function neighborGroupId(groupId: number): number | null {
+  const groups = duplicateGroups.value;
+  const index = groups.findIndex((group: any) => Number(group.id) === groupId);
+  if (index < 0) return groups[0] ? Number(groups[0].id) : null;
+  const next = groups[index + 1] || groups[index - 1];
+  return next ? Number(next.id) : null;
+}
+
+// Skip a duplicate set (hide it) or bring it back. The backend persists this by content,
+// so the set stays hidden across refreshes and rescans and is excluded from bulk deletion.
+async function setGroupHidden(groupId: number, hidden: boolean) {
+  if (duplicateActionsBusy.value) return;
+  const libraryId = libConfig._libraryId;
+  const scopeKey = props.dedupScanKey;
+  const generation = scanGeneration.value;
+  const isCurrent = () => libraryId === libConfig._libraryId && scopeKey === props.dedupScanKey
+    && generation === scanGeneration.value;
+  isChangingHiddenGroup.value = true;
+  try {
+    await dedupSetGroupHidden(groupId, hidden);
+    if (!isCurrent()) return;
+    const groupIndex = rawGroups.value.findIndex((group: any) => Number(group.id) === groupId);
+    if (groupIndex < 0) return;
+    const nextGroupId = selectedGroupId.value === groupId ? neighborGroupId(groupId) : selectedGroupId.value;
+    rawGroups.value[groupIndex] = { ...rawGroups.value[groupIndex], hidden };
+    if (hidden) selectedDupIdsByGroup.value.delete(groupId);
+    else selectUnlockedDuplicates(groupId, rawGroups.value[groupIndex].items || []);
+    // Leave the hidden view once the last hidden set is restored.
+    if (showHiddenGroups.value && hiddenGroupCount.value === 0) {
+      showHiddenGroups.value = false;
+      selectFirstGroupInView();
+    } else {
+      selectedGroupId.value = nextGroupId;
+    }
+    emitDedupStatuses();
+    await refreshOverview();
+  } catch (error) {
+    if (!isCurrent()) return;
+    console.error('Failed to update hidden duplicate set:', error);
+    toast.error(t('info_panel.dedup.hide_update_failed'));
+  } finally {
+    isChangingHiddenGroup.value = false;
+  }
+}
+
+function selectFirstGroupInView() {
+  loadedDuplicateGroupCount.value = DEDUP_THUMBNAIL_PAGE_SIZE;
+  const scroll = duplicateGroupsScrollRef.value;
+  if (scroll) scroll.scrollTop = 0;
+  const first = duplicateGroups.value[0];
+  selectedGroupId.value = first ? Number(first.id) : null;
+  void hydrateGroupThumbnails(duplicateGroups.value, selectedGroupId.value);
+}
+
+function toggleHiddenGroupsView() {
+  if (duplicateActionsBusy.value) return;
+  showHiddenGroups.value = !showHiddenGroups.value;
+  selectFirstGroupInView();
 }
 
 function applyDeletedFiles(groupId: number, deletedFileIds: number[]) {
@@ -1493,14 +1597,11 @@ function applyDeletedFiles(groupId: number, deletedFileIds: number[]) {
   }
 
   if (remainingItems.length <= 1) {
+    const nextGroupId = selectedGroupId.value === groupId ? neighborGroupId(groupId) : selectedGroupId.value;
     rawGroups.value.splice(groupIndex, 1);
     selectedDupIdsByGroup.value.delete(groupId);
     void refreshOverview();
-
-    if (selectedGroupId.value === groupId) {
-      const nextGroup = rawGroups.value[groupIndex] || rawGroups.value[groupIndex - 1];
-      selectedGroupId.value = nextGroup ? Number(nextGroup.id) : null;
-    }
+    selectedGroupId.value = nextGroupId;
     emitDedupStatuses();
     return;
   }
@@ -1676,8 +1777,10 @@ async function fetchGroups(preferredGroupId: number | null = null) {
   try {
     const groups = await dedupListGroups(1, 0, 'count_desc', 'all');
     const normalized = Array.isArray(groups) ? groups : [];
-    const availableGroupIds = new Set(normalized.map((group: any) => Number(group.id)));
-    const orderedGroups = sortDuplicateGroups(normalized.map(decorateDuplicateGroup), duplicateGroupSort.value);
+    if (showHiddenGroups.value && !normalized.some((group: any) => group.hidden)) showHiddenGroups.value = false;
+    const orderedGroups = sortDuplicateGroups(normalized.filter(isGroupInView).map(decorateDuplicateGroup), duplicateGroupSort.value);
+    const availableGroupIds = new Set(orderedGroups.map((group: any) => Number(group.id)));
+    const allGroupIds = new Set(normalized.map((group: any) => Number(group.id)));
     const nextSelectedGroupId =
       preferredGroupId && availableGroupIds.has(preferredGroupId)
         ? preferredGroupId
@@ -1695,7 +1798,7 @@ async function fetchGroups(preferredGroupId: number | null = null) {
     await refreshOverview();
 
     for (const key of Array.from(selectedDupIdsByGroup.value.keys())) {
-      if (!availableGroupIds.has(key)) {
+      if (!allGroupIds.has(key)) {
         selectedDupIdsByGroup.value.delete(key);
       }
     }

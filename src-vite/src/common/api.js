@@ -2064,6 +2064,11 @@ export async function dedupSetKeep(groupId, fileId, keep = true) {
   });
 }
 
+// Hide (skip) or unhide a duplicate set; persisted by content so it survives rescans.
+export async function dedupSetGroupHidden(groupId, hidden) {
+  return await invoke('dedup_set_group_hidden', { groupId, hidden });
+}
+
 export async function dedupGetGroupItems(groupId) {
   return await invoke('dedup_get_group_items', {
     groupId,
