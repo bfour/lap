@@ -1,10 +1,7 @@
 <template>
   <DedupSettings
-    v-if="showKeepRules && panelOpen"
-    :photo-folder="preferredFolderSource"
-    :can-rescan="canRescanWithKeepRules"
-    @rescan="rescanWithKeepRules"
-    @cancel="closeKeepRules"
+    v-if="showKeepRules"
+    @cancel="showKeepRules = false"
   />
   <div
     class="w-full h-full rounded-box bg-base-200 flex flex-col overflow-hidden"
@@ -50,7 +47,7 @@
           :tooltip="$t('info_panel.dedup.keep_rules.title')"
           :buttonSize="'small'"
           :disabled="isDedupLoading || similarLoading || isChangingDuplicateKeep"
-          @click="openKeepRules()"
+          @click="showKeepRules = true"
         />
         <TButton
           :icon="IconClose"
@@ -527,29 +524,14 @@
                 </div>
               </div>
               <div
-                v-if="dedupFolderPath(item.file)"
+                v-if="getFolderPath(item.file?.file_path)"
                 class="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-base-content/80"
-                :title="dedupFolderPath(item.file)"
+                :title="getFolderPath(item.file.file_path)"
               >
                 <IconFolder class="size-3 shrink-0" aria-hidden="true" />
                 <span dir="rtl" class="min-w-0 flex-1 truncate text-left">
                   <bdi dir="ltr">{{ formatDedupFolderPath(item.file) }}</bdi>
                 </span>
-                <button
-                  v-if="item.file?.album_id > 0"
-                  type="button"
-                  class="btn btn-xs btn-ghost btn-square shrink-0"
-                  :class="{ 'text-primary': keepRules.folderIds.includes(item.file.folder_id) }"
-                  :disabled="duplicateActionsBusy"
-                  :aria-label="$t('info_panel.dedup.keep_rules.prioritize_folder')"
-                  :title="$t('info_panel.dedup.keep_rules.prioritize_folder')"
-                  @click.stop="openKeepRules(item.file)"
-                  @dblclick.stop
-                  @keydown.enter.stop
-                  @keydown.space.stop
-                >
-                  <IconFolderFavorite class="size-4" aria-hidden="true" />
-                </button>
               </div>
             </div>
           </TransitionGroup>
@@ -581,7 +563,6 @@ import {
   getFolderPath,
   formatFolderBreadcrumb,
   isWithinRootPath,
-  normalizePathForCompare,
   getThumbnailDataUrl,
   getThumbUrl,
   isMac,
@@ -592,7 +573,8 @@ import DedupSettings from './DedupSettings.vue';
 import TButton from '@/components/TButton.vue';
 import PanelActionButton from '@/components/PanelActionButton.vue';
 import MessageBox from '@/components/MessageBox.vue';
-import { IconAdjustments, IconSelectAll, IconExclamation, IconDeselect, IconClose, IconFlag, IconFlagFilled, IconFlagOff, IconFolder, IconFolderFavorite, IconLivePhoto, IconLock, IconShield, IconRefresh, IconSplitOn, IconSplitOn4, IconTrash, IconUnlock } from '@/common/icons';
+import { IconFolder } from '@/common/icons';
+import { IconAdjustments, IconSelectAll, IconExclamation, IconDeselect, IconClose, IconFlag, IconFlagFilled, IconFlagOff, IconLivePhoto, IconLock, IconShield, IconRefresh, IconSplitOn, IconSplitOn4, IconTrash, IconUnlock } from '@/common/icons';
 import {
   dedupStartScan,
   dedupCancelScan,
@@ -689,7 +671,6 @@ const activeTab = ref<'duplicates' | 'similar'>(
 const similarLoading = ref(false);
 const similarRestoring = ref(false);
 const showKeepRules = ref(false);
-const preferredFolderSource = ref<{ albumId: number; paths: string[] } | null>(null);
 const keepRules = computed(() => ({
   preferFormat: config.dedup.keepRules?.preferFormat ?? 'raw',
   preferredDate: config.dedup.keepRules?.preferredDate ?? 'modifiedEarliest',
@@ -1016,8 +997,6 @@ function handleSimilarSelection(fileId: number, preview = false) {
 let unlistenAlbumAccessChanged: (() => void) | undefined;
 const duplicateAccessPending = ref(false);
 const duplicateActionsBusy = computed(() => isChangingDuplicateKeep.value || duplicateAccessPending.value);
-const canRescanWithKeepRules = computed(() => props.panelOpen && activeTab.value === 'duplicates'
-  && !!props.dedupScanKey && !isDedupLoading.value && !duplicateActionsBusy.value);
 const hasUnavailableDuplicates = computed(() => rawGroups.value.some((group: any) =>
   (group.items || []).some((item: any) => item.is_keep !== 1 && item.can_delete && isOriginalUnavailable(item.file))));
 
@@ -1550,58 +1529,8 @@ function dedupPairBadge(item: any): string {
   return '';
 }
 
-function dedupFolderPath(file?: { file_path?: string | null; album_id?: number }): string {
-  const folderPath = getFolderPath(file?.file_path);
-  const albumRoot = albumRootPaths.value.get(Number(file?.album_id));
-  if (folderPath && albumRoot && normalizePathForCompare(folderPath) === normalizePathForCompare(albumRoot)) {
-    return albumRoot;
-  }
-  return folderPath || (file?.file_path?.startsWith('/') ? '/' : '');
-}
-
-function folderAndAncestorPaths(folderPath: string, albumRoot: string): string[] {
-  const paths = [folderPath];
-  if (!albumRoot || (!isWithinRootPath(folderPath, albumRoot) && !(albumRoot === '/' && folderPath.startsWith('/')))) {
-    return paths;
-  }
-  const root = normalizePathForCompare(albumRoot);
-  if (normalizePathForCompare(folderPath) === root) return [albumRoot];
-  for (let parent = getFolderPath(folderPath); parent && normalizePathForCompare(parent) !== root; parent = getFolderPath(parent)) {
-    paths.push(parent);
-  }
-  return [...paths, albumRoot];
-}
-
-function openKeepRules(file?: { file_path?: string | null; album_id?: number }) {
-  preferredFolderSource.value = null;
-  if (file) {
-    const albumId = Number(file.album_id);
-    const folderPath = dedupFolderPath(file);
-    if (!(albumId > 0) || !folderPath) return;
-    preferredFolderSource.value = { albumId, paths: folderAndAncestorPaths(folderPath, albumRootPaths.value.get(albumId) || '') };
-  }
-  showKeepRules.value = true;
-}
-
-function closeKeepRules() {
-  showKeepRules.value = false;
-  preferredFolderSource.value = null;
-}
-
-function rescanWithKeepRules() {
-  if (!canRescanWithKeepRules.value) return;
-  closeKeepRules();
-  refreshDuplicates();
-}
-
-watch(() => props.panelOpen, closeKeepRules);
-watch(() => libConfig._libraryId, () => {
-  closeKeepRules();
-  albumRootPaths.value.clear();
-});
-
 function formatDedupFolderPath(file: any): string {
-  const folderPath = dedupFolderPath(file);
+  const folderPath = getFolderPath(file?.file_path);
   if (!folderPath) return '';
 
   const albumId = Number(file?.album_id || 0);
@@ -1612,7 +1541,6 @@ function formatDedupFolderPath(file: any): string {
 }
 
 async function hydrateAlbumRootPaths(groups: any[]) {
-  const libraryId = libConfig._libraryId;
   const albumIds = new Set<number>();
   for (const group of groups || []) {
     for (const item of Array.isArray(group?.items) ? group.items : []) {
@@ -1632,7 +1560,6 @@ async function hydrateAlbumRootPaths(groups: any[]) {
     }))
   );
 
-  if (libraryId !== libConfig._libraryId) return;
   for (const { albumId, album } of results) {
     if (album?.path) {
       albumRootPaths.value.set(albumId, album.path);
