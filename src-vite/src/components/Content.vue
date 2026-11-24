@@ -2674,7 +2674,7 @@ function loadDeleteThumbnails(files: FileDeleteItem[], isCurrent: () => boolean)
 }
 
 const openDedupTrashMsgbox = async (groupKey: string, fileIds: number[] = []) => {
-  if (showTrashMsgbox.value || isTrashDeleting.value) return;
+  if (showTrashMsgbox.value || showTrashFailedMsgbox.value || isTrashDeleting.value) return;
   const requestId = ++dedupDeletePreviewRequest;
   const libraryId = libConfig._libraryId;
   const scanKey = similarScanKey.value;
@@ -5143,6 +5143,7 @@ function handleLocalKeyDown(event: KeyboardEvent) {
 
   // Do not intercept editing shortcuts while typing.
   const target = event.target as HTMLElement;
+  if (target.closest?.('[data-dedup-shortcuts]')) return;
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable) {
     return;
   }

@@ -2057,9 +2057,8 @@ export async function dedupGetOverview() {
   }
 }
 
-// set keep file in duplicate group
-export async function dedupSetKeep(groupId, fileId) {
-  return await invoke('dedup_set_keep', { groupId, fileId, groupRawPairs: Boolean(config.settings.groupRawJpegPairs) });
+export async function dedupSetKeep(groupId, fileId, keep) {
+  return await invoke('dedup_set_keep', { groupId, fileId, keep, groupRawPairs: Boolean(config.settings.groupRawJpegPairs) });
 }
 
 export async function dedupGetGroupItems(groupId) {
