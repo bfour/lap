@@ -56,39 +56,6 @@ test("trash and permanent delete use distinct bindings", () => {
   }
 });
 
-test("duplicate shortcuts match in the Duplicates context with platform-specific deletion", () => {
-  const lock = event({ key: "l", code: "KeyL" });
-  const forwardDelete = event({ key: "Delete", code: "Delete" });
-  const macDelete = cmd("Backspace", "Backspace");
-  for (const platform of ["linux", "windows", "mac"]) {
-    const deletion = platform === "mac" ? macDelete : forwardDelete;
-    assert.deepEqual(findShortcutMatches("dedup", lock, platform), ["dedup.toggleKeep"]);
-    assert.deepEqual(findShortcutMatches("content", lock, platform), []);
-    assert.deepEqual(findShortcutMatches("dedup", deletion, platform), ["dedup.deleteSelected"]);
-    assert.deepEqual(findShortcutMatches("content", deletion, platform), ["file.trash"]);
-    assert.deepEqual(findShortcutMatches("dedup", { ...deletion, shiftKey: true }, platform), ["dedup.deleteAll"]);
-  }
-});
-
-test("duplicate shortcuts are editable and detect conflicts in their applicable contexts", () => {
-  const deletion = captureShortcut(event({ key: "Delete", code: "Delete" }), "linux");
-  const bulkDeletion = captureShortcut(event({ key: "Delete", code: "Delete", shiftKey: true }), "linux");
-  const custom = captureShortcut(event({ key: "d", code: "KeyD", altKey: true }), "linux");
-  const overrides = { linux: { "dedup.deleteSelected": custom } };
-  assert.equal(isShortcutEditable("dedup.toggleKeep", "linux"), true);
-  assert.equal(isShortcutEditable("dedup.deleteSelected", "mac"), true);
-  assert.equal(isShortcutEditable("dedup.deleteAll", "linux"), true);
-  assert.equal(findShortcutConflict("dedup.toggleKeep", deletion, "linux"), "dedup.deleteSelected");
-  assert.equal(findShortcutConflict("dedup.deleteSelected", deletion, "linux"), undefined);
-  assert.equal(findShortcutConflict("dedup.deleteSelected", bulkDeletion, "linux"), "dedup.deleteAll");
-  assert.equal(findShortcutConflict("dedup.deleteAll", bulkDeletion, "linux"), undefined);
-  assert.equal(findShortcutConflict("app.search", deletion, "linux"), "file.trash");
-  assert.deepEqual(normalizeShortcutOverrides(overrides), overrides);
-  assert.equal(getShortcutLabel("dedup.deleteSelected", "linux", overrides), "Alt+D");
-  assert.deepEqual(findShortcutMatches("dedup", event({ key: "d", code: "KeyD", altKey: true }), "linux", overrides), ["dedup.deleteSelected"]);
-  assert.deepEqual(findShortcutMatches("dedup", event({ key: "Delete" }), "linux", overrides), []);
-});
-
 test("QWERTY: Cmd-A selects all", () => {
   assert.equal(matchesShortcut("file.selectAll", cmd("a", "KeyA"), "mac"), true);
 });

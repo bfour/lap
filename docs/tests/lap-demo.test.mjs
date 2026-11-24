@@ -77,26 +77,14 @@ test('actual move and search/type constraints combine', async () => {
   assert.deepEqual(ids(a.demoBackend.query({ searchFileName: 'Melk', searchFileType: 4, searchFolder: '/Pictures/Sample-Wikimedia/Travel 2024' })), [9]);
   assert.equal(a.demoBackend.query({ searchFileName: 'Melk', searchFileType: 4, searchFolder: '/Pictures/Sample-Wikimedia/Nature 2025' }).length, 0);
 });
-test('actual dedup keep choices protect multiple copies and survive reload', async () => {
-  const storage = new Map();
-  const a = await adapter(storage);
-  const { preview: stale } = await a.invoke('dedup_delete', { request: { fileIds: [8, 20], preview: true } });
-  assert.deepEqual(Array.from(stale.previewFileIds), [20]);
+test('actual dedup keep choice controls deletion and remaining groups', async () => {
+  const a = await adapter();
   await a.invoke('dedup_set_keep', { groupId: 8, fileId: 20 });
-  const reloaded = await adapter(storage);
-  assert.deepEqual(Array.from(reloaded.demoBackend.groups()[0].items, i => i.is_keep), [1, 1]);
-  await assert.rejects(a.invoke('dedup_delete', {
-    request: { fileIds: [8, 20], planToken: stale.token },
-  }), /dedup_plan_changed/);
+  assert.equal(a.demoBackend.groups()[0].items.find(i => i.file_id === 20).is_keep, 1);
+  const { preview } = await a.invoke('dedup_delete', { request: { preview: true } });
+  assert.equal(preview.fileCount, 2);
   assert.equal(a.demoBackend.query().length, 20);
-  const { preview: protectedPreview } = await a.invoke('dedup_delete', { request: { deleteAll: true, preview: true } });
-  assert.deepEqual(Array.from(protectedPreview.previewFileIds), [19]);
-
-  await a.invoke('dedup_set_keep', { groupId: 8, fileId: 8, keep: false });
-  await assert.rejects(a.invoke('dedup_set_keep', { groupId: 8, fileId: 20, keep: false }), /at least one photo/);
-  const { preview } = await a.invoke('dedup_delete', { request: { deleteAll: true, preview: true } });
-  assert.deepEqual(Array.from(preview.previewFileIds), [8, 19]);
-  await a.invoke('dedup_delete', { request: { deleteAll: true, planToken: preview.token } });
+  await a.invoke('dedup_delete', { request: { planToken: preview.token } });
   assert.equal(a.demoBackend.query().length, 18);
   assert.equal(a.demoBackend.groups().length, 0);
   assert(a.demoBackend.state.photos.find(p => p.id === 8).deleted);

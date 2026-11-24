@@ -9,7 +9,6 @@ export type ShortcutContext =
   | 'album-list'
   | 'album-folder'
   | 'tag-dialog'
-  | 'dedup'
   | 'map';
 
 export type ShortcutActionId =
@@ -34,9 +33,6 @@ export type ShortcutActionId =
   | 'file.deletePermanently'
   | 'file.reveal'
   | 'file.searchSimilar'
-  | 'dedup.toggleKeep'
-  | 'dedup.deleteSelected'
-  | 'dedup.deleteAll'
   | 'meta.favorite'
   | 'meta.rating.clear'
   | 'meta.rating.one'
@@ -290,27 +286,6 @@ export const SHORTCUTS: readonly ShortcutDefinition[] = [
     id: 'file.searchSimilar',
     contexts: ['content'],
     defaultBindings: [{ code: 'KeyS', allowShift: true, label: 'S' }],
-  },
-  {
-    id: 'dedup.toggleKeep',
-    contexts: ['dedup'],
-    defaultBindings: [{ code: 'KeyL', label: 'L' }],
-  },
-  {
-    id: 'dedup.deleteSelected',
-    contexts: ['dedup'],
-    defaultBindings: [
-      { key: 'Backspace', modifiers: ['meta'], platforms: ['mac'], label: '⌘⌫' },
-      { key: 'Delete', platforms: ['windows', 'linux'], label: 'Delete' },
-    ],
-  },
-  {
-    id: 'dedup.deleteAll',
-    contexts: ['dedup'],
-    defaultBindings: [
-      { key: 'Backspace', modifiers: ['meta', 'shift'], platforms: ['mac'], label: '⇧⌘⌫' },
-      { key: 'Delete', modifiers: ['shift'], platforms: ['windows', 'linux'], label: 'Shift+Delete' },
-    ],
   },
   {
     id: 'meta.favorite',

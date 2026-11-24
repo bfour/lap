@@ -305,11 +305,8 @@ const assert = require("node:assert/strict");
     await dedup
       .getByRole("button", { name: "Duplicates", exact: true })
       .click();
-    const rows = dedup.locator("[data-duplicate-file-id]");
-    const originalKeep = rows.locator('button[aria-pressed="true"]').first();
-    const originalRow = originalKeep.locator("xpath=ancestor::*[@data-duplicate-file-id][1]");
-    const originalId = await originalRow.getAttribute("data-duplicate-file-id");
-    const keep = rows.getByRole("button", { name: "Lock to keep", exact: true }).last();
+    const keep = dedup.getByRole("button", { name: "Keep", exact: true }).last();
+    await keep.locator("../..").hover();
     await keep.click();
     assert(
       await page.evaluate(() =>
@@ -318,11 +315,9 @@ const assert = require("node:assert/strict");
         ),
       ),
     );
-    const original = dedup.locator(`[data-duplicate-file-id="${originalId}"]`);
-    await original.getByRole("button", { name: "Unlock keep", exact: true }).click();
-    assert.equal(await original.locator('input[type="checkbox"]').isChecked(), true);
+    await dedup.locator('input[type="checkbox"]').check();
     await dedup
-      .getByRole("button", { name: "Move selected to trash", exact: true })
+      .getByRole("button", { name: "Move to trash", exact: true })
       .click();
     await page.waitForFunction(
       () =>

@@ -1412,14 +1412,6 @@ const shortcutDisplaySections: Array<{ key: string; items: ShortcutDisplayItem[]
     ],
   },
   {
-    key: 'dedup',
-    items: [
-      { actionId: 'dedup.toggleKeep', labelKey: 'dedup_toggle_keep' },
-      { actionId: 'dedup.deleteSelected', labelKey: 'dedup_delete_selected' },
-      { actionId: 'dedup.deleteAll', labelKey: 'dedup_delete_all' },
-    ],
-  },
-  {
     key: 'metadata',
     items: [
       { actionId: 'meta.favorite', labelKey: 'toggle_favorite', advanceLabelKey: 'toggle_favorite_and_next' },

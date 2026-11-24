@@ -10991,13 +10991,6 @@ fn create_db_internal() -> Result<(), String> {
         [],
     )
     .map_err(|e| e.to_string())?;
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS duplicate_file_keepers (
-            file_id INTEGER PRIMARY KEY REFERENCES afiles(id) ON DELETE CASCADE
-        )",
-        [],
-    )
-    .map_err(|e| e.to_string())?;
 
     // Run schema migrations after base tables are ensured.
     crate::t_migration::check_and_migrate(&conn)?;

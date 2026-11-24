@@ -46,7 +46,6 @@ export const useConfigStore = defineStore('configStore', {
     dedup: {
       keepRules: { preferFormat: 'raw', preferredDate: 'modifiedEarliest', preferredSize: 'largestDimensions' },
       activeTab: 'duplicates',   // active dedup tab ('duplicates' | 'similar')
-      groupSort: 'count_desc',
       duplicateSetsHeight: 50,   // duplicate sets section height as a percentage
     },
 

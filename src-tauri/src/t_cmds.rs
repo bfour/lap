@@ -5009,17 +5009,8 @@ pub async fn dedup_get_overview(library_id: String, group_raw_pairs: bool) -> Re
 }
 
 #[tauri::command]
-pub async fn dedup_set_keep(
-    group_id: i64, file_id: i64, keep: Option<bool>, group_raw_pairs: Option<bool>,
-) -> Result<(), String> {
-    let library_id = t_config::current_library_id()?;
-    tauri::async_runtime::spawn_blocking(move || {
-        with_current_library(&library_id, || {
-            crate::t_dedup::set_keep(group_id, file_id, keep.unwrap_or(true), group_raw_pairs.unwrap_or(false))
-        })
-    })
-    .await
-    .map_err(|error| format!("Failed to update duplicate keep choice: {error}"))?
+pub fn dedup_set_keep(group_id: i64, file_id: i64, group_raw_pairs: Option<bool>) -> Result<(), String> {
+    crate::t_dedup::set_keep(group_id, file_id, group_raw_pairs.unwrap_or(false))
 }
 
 #[tauri::command]
@@ -5034,12 +5025,9 @@ pub fn dedup_get_group_items(
 pub async fn dedup_delete(
     request: crate::t_dedup::DedupDeleteRequest,
 ) -> Result<crate::t_dedup::DedupDeleteResult, String> {
-    let library_id = t_config::current_library_id()?;
-    tauri::async_runtime::spawn_blocking(move || {
-        with_current_library(&library_id, || crate::t_dedup::delete(request))
-    })
-    .await
-    .map_err(|e| format!("Failed to run dedup delete: {}", e))?
+    tauri::async_runtime::spawn_blocking(move || crate::t_dedup::delete(request))
+        .await
+        .map_err(|e| format!("Failed to run dedup delete: {}", e))?
 }
 
 // ----------------------------------------------------------------------------

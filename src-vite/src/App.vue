@@ -166,9 +166,6 @@ const handleKeyDown = (event) => {
     return;
   }
 
-  // The focused Duplicates pane owns its file shortcuts, including Delete.
-  if (event.target?.closest?.('[data-dedup-shortcuts]')) return;
-
   // Inputs that handle their own keys must not trigger global shortcuts (Enter is file.rename on
   // macOS). SearchBox/MoveTo/ImportOrganize are deliberately excluded — they rely on this channel.
   const uiStore = useUIStore();
