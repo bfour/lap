@@ -101,6 +101,26 @@ test('actual dedup keep choices protect multiple copies and survive reload', asy
   assert.equal(a.demoBackend.groups().length, 0);
   assert(a.demoBackend.state.photos.find(p => p.id === 8).deleted);
 });
+test('a preferred parent folder supplies the automatic duplicate keeper on rescan', async () => {
+  const a = await adapter();
+  const state = a.demoBackend.state;
+  state.folders.push({ id: 3, album: 1, name: 'Archive/2025' });
+  state.photos.find(file => file.id === 20).folder = 3;
+  const parentPath = '/Pictures/Sample-Wikimedia/Archive';
+  const parent = await a.invoke('select_folder', { albumId: 1, folderPath: parentPath });
+  assert.equal(parent.path, parentPath);
+
+  const keepIds = () => Array.from(a.demoBackend.groups().find(group => group.id === 8).items
+    .filter(item => item.is_keep === 1), item => item.file_id);
+  assert.deepEqual(keepIds(), [8]);
+  await a.invoke('dedup_start_scan', { keepRules: { folderIds: [parent.id, 1] } });
+  assert.deepEqual(keepIds(), [20]);
+  await a.invoke('dedup_start_scan', { keepRules: { folderIds: [1, parent.id] } });
+  assert.deepEqual(keepIds(), [8]);
+  await a.invoke('dedup_set_keep', { groupId: 8, fileId: 20 });
+  await a.invoke('dedup_start_scan', { keepRules: { folderIds: [parent.id, 1] } });
+  assert.deepEqual(keepIds(), [8, 20]);
+});
 test('thumbnail and preview mapping share one asset, including duplicate pairs', async () => {
   const a = await adapter();
   assert.equal(a.demoMediaUrl(20), a.demoMediaUrl(8));
