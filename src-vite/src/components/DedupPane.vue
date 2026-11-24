@@ -341,6 +341,15 @@
               }) }}
             </div>
           </div>
+          <PanelActionButton
+            class="ml-auto"
+            :icon="IconTrash"
+            danger
+            :disabled="!canTrashAllDuplicates"
+            @click="trashAllDuplicates"
+          >
+            {{ albumDeleteLabel }}
+          </PanelActionButton>
         </section>
       <div ref="dedupSplitPaneRef" class="flex min-h-0 flex-1 flex-col">
         <div
@@ -447,12 +456,12 @@
             </PanelActionButton>
             <PanelActionButton
               :icon="IconTrash"
-              :disabled="!canTrashAllDuplicates"
-              :title="duplicateActionTitle(bulkDeleteLabel, 'dedup.deleteAll')"
+              :disabled="!canTrashGroupDuplicates"
+              :title="duplicateActionTitle(groupDeleteLabel, 'dedup.deleteAll')"
               danger
-              @click="trashAllDuplicates"
+              @click="trashGroupDuplicates(activeGroup.id)"
             >
-              {{ bulkDeleteLabel }}
+              {{ groupDeleteLabel }}
             </PanelActionButton>
           </div>
           <TransitionGroup
@@ -817,8 +826,10 @@ const selectedDeleteBytes = computed(() => {
 });
 const selectedDeleteLabel = computed(() => t(config.settings.fileDeleteBehavior === 'permanent'
   ? 'info_panel.dedup.delete_selected' : 'info_panel.dedup.trash_selected'));
-const bulkDeleteLabel = computed(() => t(config.settings.fileDeleteBehavior === 'permanent'
+const albumDeleteLabel = computed(() => t(config.settings.fileDeleteBehavior === 'permanent'
   ? 'info_panel.dedup.delete_all' : 'info_panel.dedup.trash_all'));
+const groupDeleteLabel = computed(() => t(config.settings.fileDeleteBehavior === 'permanent'
+  ? 'info_panel.dedup.delete_group' : 'info_panel.dedup.trash_group'));
 
 const selectedSimilarCount = computed(() => {
   if (!activeSimilarGroup.value) return 0;
@@ -1381,7 +1392,7 @@ function handleDuplicateShortcuts(event: KeyboardEvent) {
 
   const group = activeGroup.value;
   if (action === 'dedup.deleteAll') {
-    void trashAllDuplicates();
+    trashGroupDuplicates(group.id);
   } else if (action === 'dedup.deleteSelected') {
     trashSelectedDuplicates(group.id);
   } else {
@@ -1453,6 +1464,23 @@ function isAllGroupDuplicatesSelected(groupId: number) {
 function trashSelectedDuplicates(groupId: number) {
   if (isChangingDuplicateKeep.value || duplicateAccessPending.value) return;
   const ids = Array.from(getDupSelectedSet(groupId).values()).filter(fileId => isDupSelected(groupId, fileId));
+  if (ids.length === 0) return;
+  emit('trash-selected-duplicates', String(groupId), ids);
+}
+
+function getGroupDeletableIds(groupId: number): number[] {
+  const group = duplicateGroups.value.find(g => g.id === groupId);
+  return group ? group.duplicateItems.filter(canSelectForDeletion).map((item: any) => Number(item.file_id)) : [];
+}
+
+const canTrashGroupDuplicates = computed(() => !!activeGroup.value && !duplicateActionsBusy.value
+  && getGroupDeletableIds(activeGroup.value.id).length > 0);
+
+// Trashes every removable duplicate in the given set (the list shown below the actions),
+// leaving the kept photo and any protected or unavailable items untouched.
+function trashGroupDuplicates(groupId: number) {
+  if (duplicateActionsBusy.value) return;
+  const ids = getGroupDeletableIds(groupId);
   if (ids.length === 0) return;
   emit('trash-selected-duplicates', String(groupId), ids);
 }
