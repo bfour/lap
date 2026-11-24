@@ -835,7 +835,7 @@ import {
   normalizeGridSizePosition,
   thumbnailProfile,
 } from '@/common/thumbnailProfiles';
-import { getShortcutLabel, matchesShortcut, ShortcutActionId, ShortcutPlatform, VIEW_BACKGROUND_SHORTCUTS } from '@/common/shortcuts';
+import { getShortcutLabel, hasShortcutOverride, matchesShortcut, shouldAdvanceShortcut, ShortcutActionId, ShortcutEventLike, ShortcutPlatform, VIEW_BACKGROUND_SHORTCUTS } from '@/common/shortcuts';
 import { getSmartTagById } from '@/common/smartTags';
 import { handleVideoPlaybackShortcut, handleVideoEscapeShortcut } from '@/common/video';
 import { clearFolderFileCounts, setFolderFileCount, getCountedFolderPaths } from '@/composables/useAlbumSelection';
@@ -2922,7 +2922,7 @@ const toast = useToast();
 const shortcutPlatform: ShortcutPlatform = isMac ? 'mac' : (isLinux ? 'linux' : 'windows');
 const pendingFolderSyncs = new Map<number, Promise<any>>();
 let lastSyncedAlbumFolder = '';
-const shortcut = (actionId: ShortcutActionId) => getShortcutLabel(actionId, shortcutPlatform);
+const shortcut = (actionId: ShortcutActionId) => getShortcutLabel(actionId, shortcutPlatform, config.shortcutBindings);
 const ratingActions: Array<{ actionId: ShortcutActionId; rating: number }> = [
   { actionId: 'meta.rating.clear', rating: 0 },
   { actionId: 'meta.rating.one', rating: 1 },
@@ -2938,17 +2938,15 @@ const cullingActions: Array<{ actionId: ShortcutActionId; cullingFlag: number }>
 ];
 
 function getMatchedRating(event: KeyboardEvent) {
-  const match = ratingActions.find(({ actionId }) => matchesShortcut(actionId, event, shortcutPlatform));
-  return match ? match.rating : null;
+  return ratingActions.find(({ actionId }) => matchesShortcut(actionId, event, shortcutPlatform, config.shortcutBindings));
 }
 
 function getMatchedCulling(event: KeyboardEvent) {
-  const match = cullingActions.find(({ actionId }) => matchesShortcut(actionId, event, shortcutPlatform));
-  return match ? match.cullingFlag : null;
+  return cullingActions.find(({ actionId }) => matchesShortcut(actionId, event, shortcutPlatform, config.shortcutBindings));
 }
 
 function getMatchedViewBackground(event: KeyboardEvent): number | null {
-  const match = VIEW_BACKGROUND_SHORTCUTS.find(({ actionId }) => matchesShortcut(actionId, event, shortcutPlatform));
+  const match = VIEW_BACKGROUND_SHORTCUTS.find(({ actionId }) => matchesShortcut(actionId, event, shortcutPlatform, config.shortcutBindings));
   return match?.value ?? null;
 }
 
@@ -5141,11 +5139,11 @@ const keyActions = {
 
 // Local keydown handler for navigation (prevents default browser behavior)
 function handleLocalKeyDown(event: KeyboardEvent) {
-  if (event.defaultPrevented || isUpdatingRawGrouping.value) return;
+  if (event.defaultPrevented || event.isComposing || isUpdatingRawGrouping.value) return;
 
   // Do not intercept editing shortcuts while typing.
   const target = event.target as HTMLElement;
-  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable) {
     return;
   }
 
@@ -5154,7 +5152,7 @@ function handleLocalKeyDown(event: KeyboardEvent) {
     return;
   }
 
-  if (matchesShortcut('file.paste', event, shortcutPlatform)) {
+  if (matchesShortcut('file.paste', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     void pasteClipboardImage();
     return;
@@ -5176,32 +5174,32 @@ function handleLocalKeyDown(event: KeyboardEvent) {
     return;
   }
 
-  if (selectMode.value && matchesShortcut('file.selectNone', event, shortcutPlatform)) {
+  if (selectMode.value && matchesShortcut('file.selectNone', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     selectNoneInCurrentList();
     return;
   }
 
-  if (selectMode.value && matchesShortcut('file.invertSelection', event, shortcutPlatform)) {
+  if (selectMode.value && matchesShortcut('file.invertSelection', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     void invertSelectionInCurrentList();
     return;
   }
 
-  if (matchesShortcut('meta.info', event, shortcutPlatform)) {
+  if (matchesShortcut('meta.info', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     toggleInfoPanel();
     return;
   }
 
-  if (showQuickView.value && fileList.value[selectedItemIndex.value]?.file_type !== 2 && (event.key === ' ' || event.key === 'Space') && matchesShortcut('view.quickPreview', event, shortcutPlatform)) {
+  if (showQuickView.value && matchesShortcut('view.quickPreview', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     // macOS dispatches this shortcut through the capture/global channel.
-    if (!isMac && !event.repeat) closeQuickPreview();
+    if (!isMac) handleQuickPreviewShortcut(event);
     return;
   }
 
-  if (matchesShortcut('view.close', event, shortcutPlatform)) {
+  if (matchesShortcut('view.close', event, shortcutPlatform, config.shortcutBindings)) {
     // Close Quick Preview in one step, even in fullscreen. Unmount restores
     // the native window while preserving the saved fullscreen preference.
     if (showQuickView.value) {
@@ -5233,7 +5231,7 @@ function handleLocalKeyDown(event: KeyboardEvent) {
     }
   }
 
-  if (matchesShortcut('file.selectAll', event, shortcutPlatform)) {
+  if (matchesShortcut('file.selectAll', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     void selectAllInCurrentList();
     return;
@@ -5246,59 +5244,65 @@ function handleLocalKeyDown(event: KeyboardEvent) {
   // Keep only close and background shortcuts available during slideshow.
   if (
     isSlideShow.value &&
-    !matchesShortcut('view.close', event, shortcutPlatform) &&
-    !matchesShortcut('view.cycleBackground', event, shortcutPlatform) &&
+    !matchesShortcut('view.close', event, shortcutPlatform, config.shortcutBindings) &&
+    !matchesShortcut('view.cycleBackground', event, shortcutPlatform, config.shortcutBindings) &&
     getMatchedViewBackground(event) === null
   ) {
     return;
   }
 
   const ratingShortcut = getMatchedRating(event);
-  if (ratingShortcut !== null) {
+  if (ratingShortcut) {
     event.preventDefault();
     if (selectMode.value && selectedCount.value === 0) return;
     if (selectMode.value) {
-      void selectModeSetRatings(ratingShortcut);
+      void selectModeSetRatings(ratingShortcut.rating);
     } else {
-      if (!event.repeat) void setSelectedFileRating(ratingShortcut, event.shiftKey);
+      if (!event.repeat) {
+        const advance = shouldAdvanceShortcut(ratingShortcut.actionId, event, shortcutPlatform, config.shortcutBindings);
+        void setSelectedFileRating(ratingShortcut.rating, advance);
+      }
     }
     return;
   }
 
   const cullingShortcut = getMatchedCulling(event);
-  if (cullingShortcut !== null) {
+  if (cullingShortcut) {
     event.preventDefault();
     if (selectMode.value && selectedCount.value === 0) return;
     if (selectMode.value) {
-      void selectModeSetCullingFlags(cullingShortcut);
+      void selectModeSetCullingFlags(cullingShortcut.cullingFlag);
     } else {
-      if (!event.repeat) void setSelectedFileCullingFlag(cullingShortcut, event.shiftKey);
+      if (!event.repeat) {
+        const advance = shouldAdvanceShortcut(cullingShortcut.actionId, event, shortcutPlatform, config.shortcutBindings);
+        void setSelectedFileCullingFlag(cullingShortcut.cullingFlag, advance);
+      }
     }
     return;
   }
 
-  if (matchesShortcut('file.searchSimilar', event, shortcutPlatform)) {
+  if (matchesShortcut('file.searchSimilar', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (selectMode.value && selectedCount.value === 0) return;
     enterSimilarSearchMode(fileList.value[selectedItemIndex.value]);
     return;
   }
 
-  if (matchesShortcut('file.openExternalApp', event, shortcutPlatform)) {
+  if (matchesShortcut('file.openExternalApp', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (selectMode.value && selectedCount.value === 0) return;
     void openInExternalApp();
     return;
   }
 
-  if (matchesShortcut('file.reveal', event, shortcutPlatform)) {
+  if (matchesShortcut('file.reveal', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (selectMode.value && selectedCount.value === 0) return;
     if (!currentOriginalsUnavailable()) revealPath(fileList.value[selectedItemIndex.value].file_path);
     return;
   }
 
-  if (getActivePreviewMode() !== 'none' && matchesShortcut('view.cycleBackground', event, shortcutPlatform)) {
+  if (getActivePreviewMode() !== 'none' && matchesShortcut('view.cycleBackground', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     config.cycleViewBackground();
     void tauriEmit('settings-viewBackground-changed', config.settings.viewBackground);
@@ -5312,24 +5316,22 @@ function handleLocalKeyDown(event: KeyboardEvent) {
     return;
   }
 
-  if (target.tagName !== 'SELECT' && matchesShortcut('view.cycleRawPreview', event, shortcutPlatform)) {
+  if (matchesShortcut('view.cycleRawPreview', event, shortcutPlatform, config.shortcutBindings)) {
     if (!event.repeat && getActivePreviewMediaRef()?.cycleRawPreview?.()) event.preventDefault();
     return;
   }
-  if (getActivePreviewMode() !== 'none' && matchesShortcut('view.toggleFullscreen', event, shortcutPlatform)) {
-    if (target.tagName === 'SELECT') return;
+  if (getActivePreviewMode() !== 'none' && matchesShortcut('view.toggleFullscreen', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (!event.repeat) void getActivePreviewMediaRef()?.toggleFullScreen?.();
     return;
   }
-  if (getActivePreviewMode() !== 'none' && matchesShortcut('view.toggleAfAreas', event, shortcutPlatform)) {
-    if (target.tagName === 'SELECT') return;
+  if (getActivePreviewMode() !== 'none' && matchesShortcut('view.toggleAfAreas', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (!event.repeat) getActivePreviewMediaRef()?.toggleAfAreas?.();
     return;
   }
 
-  if (getActivePreviewMode() !== 'none' && matchesShortcut('view.zoomFit', event, shortcutPlatform)) {
+  if (getActivePreviewMode() !== 'none' && matchesShortcut('view.zoomFit', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (!event.repeat) {
       getActivePreviewMediaRef()?.toggleZoomFit?.();
@@ -5337,85 +5339,85 @@ function handleLocalKeyDown(event: KeyboardEvent) {
     return;
   }
 
-  if (getActivePreviewMode() !== 'none' && matchesShortcut('view.zoomIn', event, shortcutPlatform) && event.key === '=') {
+  if (getActivePreviewMode() !== 'none' && matchesShortcut('view.zoomIn', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     getActivePreviewMediaRef()?.zoomIn?.();
     return;
   }
 
-  if (getActivePreviewMode() !== 'none' && matchesShortcut('view.zoomOut', event, shortcutPlatform) && event.key === '-') {
+  if (getActivePreviewMode() !== 'none' && matchesShortcut('view.zoomOut', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     getActivePreviewMediaRef()?.zoomOut?.();
     return;
   }
 
-  if (getActivePreviewMode() === 'none' && matchesShortcut('view.zoomIn', event, shortcutPlatform) && event.key === '=') {
+  if (getActivePreviewMode() === 'none' && matchesShortcut('view.zoomIn', event, shortcutPlatform, config.shortcutBindings)) {
     if (!isContentInteractionActive()) return;
     event.preventDefault();
     setGridSize(gridSize.value + 10);
     return;
   }
 
-  if (getActivePreviewMode() === 'none' && matchesShortcut('view.zoomOut', event, shortcutPlatform) && event.key === '-') {
+  if (getActivePreviewMode() === 'none' && matchesShortcut('view.zoomOut', event, shortcutPlatform, config.shortcutBindings)) {
     if (!isContentInteractionActive()) return;
     event.preventDefault();
     setGridSize(gridSize.value - 10);
     return;
   }
 
-  if (matchesShortcut('meta.favorite', event, shortcutPlatform)) {
+  if (matchesShortcut('meta.favorite', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (selectMode.value) {
       void toggleSelectModeFavorite();
     } else {
-      if (!event.repeat) void toggleFavorite(event.shiftKey);
+      if (!event.repeat) void toggleFavorite(shouldAdvanceShortcut('meta.favorite', event, shortcutPlatform, config.shortcutBindings));
     }
     return;
   }
 
-  if (matchesShortcut('meta.tag', event, shortcutPlatform)) {
+  if (matchesShortcut('meta.tag', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (selectMode.value && selectedCount.value === 0) return;
     void clickTag();
     return;
   }
 
-  if (matchesShortcut('meta.edit', event, shortcutPlatform)) {
+  if (matchesShortcut('meta.edit', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (!event.repeat) void openCommentEditor();
     return;
   }
 
-  if (matchesShortcut('meta.collection', event, shortcutPlatform)) {
+  if (matchesShortcut('meta.collection', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (selectMode.value && selectedCount.value === 0) return;
     void clickAddToCollection();
     return;
   }
 
-  if (matchesShortcut('meta.rotate', event, shortcutPlatform)
-    || matchesShortcut('meta.rotateCounterclockwise', event, shortcutPlatform)) {
+  const rotateCounterclockwise = matchesShortcut('meta.rotateCounterclockwise', event, shortcutPlatform, config.shortcutBindings);
+  if (rotateCounterclockwise || matchesShortcut('meta.rotate', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (selectMode.value && selectedCount.value === 0) return;
-    void rotateSelected(event.shiftKey ? -90 : 90);
+    void rotateSelected(rotateCounterclockwise ? -90 : 90);
     return;
   }
 
-  if (matchesShortcut('file.moveTo', event, shortcutPlatform)) {
+  if (matchesShortcut('file.moveTo', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (selectMode.value && selectedCount.value === 0) return;
     if (!currentOriginalsUnavailable()) showMoveTo.value = true;
     return;
   }
 
-  if (matchesShortcut('file.rename', event, shortcutPlatform)) {
+  if (matchesShortcut('file.rename', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     event.stopPropagation();
     clickRename();
     return;
   }
 
-  if (!isMac && matchesShortcut('view.first', event, shortcutPlatform)) {
+  if (!isMac && matchesShortcut('view.first', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     checkUnsavedChanges(() => {
       selectedItemIndex.value = 0;
@@ -5423,7 +5425,7 @@ function handleLocalKeyDown(event: KeyboardEvent) {
     return;
   }
 
-  if (!isMac && matchesShortcut('view.last', event, shortcutPlatform)) {
+  if (!isMac && matchesShortcut('view.last', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     checkUnsavedChanges(() => {
       selectedItemIndex.value = fileList.value.length - 1;
@@ -5431,48 +5433,58 @@ function handleLocalKeyDown(event: KeyboardEvent) {
     return;
   }
 
-  if (matchesShortcut('view.pageUp', event, shortcutPlatform) || matchesShortcut('view.pageDown', event, shortcutPlatform)) {
+  if (matchesShortcut('view.pageUp', event, shortcutPlatform, config.shortcutBindings) || matchesShortcut('view.pageDown', event, shortcutPlatform, config.shortcutBindings)) {
     if (getActivePreviewMode() === 'none') event.preventDefault();
     return; // Navigation is dispatched once through global-keydown below.
   }
 
   const handledKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', 'Space', ' '];
 
-  if (!isMac) {
-    handleQuickPreviewShortcut(event);
+  if (!isMac && handleQuickPreviewShortcut(event)) {
+    event.preventDefault();
+    return;
   }
 
   if (handledKeys.includes(event.key)) {
     event.preventDefault();
   }
 
+  const noCommandModifiers = !event.ctrlKey && !event.metaKey && !event.altKey;
   const isFilmstrip = isFilmstripView.value;
-  const selectionDirection =
-    event.key === 'ArrowRight' || (isFilmstrip && event.key === 'ArrowDown')
-      ? 'next'
-      : event.key === 'ArrowLeft' || (isFilmstrip && event.key === 'ArrowUp')
-        ? 'prev'
-        : null;
-
-  if (event.shiftKey && selectionDirection && toggleKeyboardSelection(selectionDirection)) {
+  const arrowDirection = !noCommandModifiers ? null
+    : event.key === 'ArrowRight' || (isFilmstrip && event.key === 'ArrowDown') ? 'next'
+    : event.key === 'ArrowLeft' || (isFilmstrip && event.key === 'ArrowUp') ? 'prev' : null;
+  if (event.shiftKey && arrowDirection && toggleKeyboardSelection(arrowDirection)) {
     return;
   }
-
-  if (event.key === 'ArrowRight' || (isFilmstrip && event.key === 'ArrowDown')) {
-    requestNavigate('next');
-  } else if (event.key === 'ArrowLeft' || (isFilmstrip && event.key === 'ArrowUp')) {
-    requestNavigate('prev');
+  const next = matchesShortcut('view.next', event, shortcutPlatform, config.shortcutBindings);
+  const previous = matchesShortcut('view.previous', event, shortcutPlatform, config.shortcutBindings);
+  let direction: 'next' | 'prev' | null = next ? 'next' : previous ? 'prev' : null;
+  if (!direction && arrowDirection) {
+    const filmstripArrow = isFilmstrip && (event.key === 'ArrowDown' || event.key === 'ArrowUp');
+    const action = arrowDirection === 'next' ? 'view.next' : 'view.previous';
+    if (filmstripArrow || (event.shiftKey && !hasShortcutOverride(action, shortcutPlatform, config.shortcutBindings))) {
+      direction = arrowDirection;
+    }
+  }
+  if (direction) {
+    event.preventDefault();
+    requestNavigate(direction);
   }
 }
 
 function handlePreviewSpaceKeyDown(event: KeyboardEvent) {
+  if ((event.target as HTMLElement | null)?.closest?.('[data-shortcut-capture]')) return;
   const mode = getActivePreviewMode();
-  const togglesSelection = selectMode.value && mode === 'filmstrip' && !isSlideShow.value;
-  if (mode === 'none' || (!togglesSelection && fileList.value[selectedItemIndex.value]?.file_type !== 2)
-    || uiStore.inputStack.length > 0 || uiStore.activePane === 'left-sidebar') return;
+  if (mode === 'none' || uiStore.inputStack.length > 0 || uiStore.activePane === 'left-sidebar') return;
+  const togglesSelection = selectMode.value && mode === 'filmstrip' && !isSlideShow.value
+    && (event.key !== 'Enter' || hasShortcutOverride('view.quickPreview', shortcutPlatform, config.shortcutBindings))
+    && matchesShortcut('view.quickPreview', event, shortcutPlatform, config.shortcutBindings);
+  if (!togglesSelection && fileList.value[selectedItemIndex.value]?.file_type !== 2) return;
+
   handleVideoEscapeShortcut(event, shortcutPlatform, () => handleLocalKeyDown(event));
   if (event.defaultPrevented) return;
-  // Consume Space before video.js controls. macOS performs selection through
+  // Consume the preview shortcut before video.js controls. macOS performs selection through
   // the App capture/global channel; other platforms dispatch it here once.
   handleVideoPlaybackShortcut(event, shortcutPlatform, () => {
     if (togglesSelection) {
@@ -5480,16 +5492,16 @@ function handlePreviewSpaceKeyDown(event: KeyboardEvent) {
     } else {
       getActivePreviewMediaRef()?.togglePlay?.();
     }
-  });
+  }, config.shortcutBindings, togglesSelection ? 'view.quickPreview' : 'view.togglePlayback');
 }
 
-function handleQuickPreviewShortcut(event: { key: string; code?: string; repeat?: boolean }): boolean {
-  if (!matchesShortcut('view.quickPreview', event, shortcutPlatform)) {
+function handleQuickPreviewShortcut(event: ShortcutEventLike & { repeat?: boolean }): boolean {
+  if (!matchesShortcut('view.quickPreview', event, shortcutPlatform, config.shortcutBindings)) {
     return false;
   }
   if (event.repeat) return true;
 
-  if (event.key === 'Enter') {
+  if (event.key === 'Enter' && !hasShortcutOverride('view.quickPreview', shortcutPlatform, config.shortcutBindings)) {
     if (!showQuickView.value && !isFilmstripView.value) {
       showQuickView.value = true;
       quickViewZoomFit.value = true;
@@ -5497,17 +5509,14 @@ function handleQuickPreviewShortcut(event: { key: string; code?: string; repeat?
     return true;
   }
 
-  if (event.key !== 'Space' && event.key !== ' ') {
-    return false;
-  }
-
   if (selectMode.value && getActivePreviewMode() !== 'quick-view') {
     checkUnsavedChanges(() => { void handleItemSelectToggled(selectedItemIndex.value); });
     return true;
   }
 
-  // Video Space is dispatched once by the capture handler above.
-  if (getActivePreviewMode() !== 'none' && fileList.value[selectedItemIndex.value]?.file_type === 2) return true;
+  // When preview and playback share a key, the video capture handler owns it.
+  if (getActivePreviewMode() !== 'none' && fileList.value[selectedItemIndex.value]?.file_type === 2
+    && matchesShortcut('view.togglePlayback', event, shortcutPlatform, config.shortcutBindings)) return true;
 
   if (getActivePreviewMode() === 'quick-view') {
     closeQuickPreview();
@@ -5559,7 +5568,7 @@ function handleContentWheel(event: WheelEvent) {
 function isTextInputFocused() {
   const active = document.activeElement as HTMLElement | null;
   if (!active) return false;
-  return active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable;
+  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable;
 }
 
 // Global keydown handler (from Tauri)
@@ -5580,10 +5589,10 @@ const handleKeyDown = (e: any) => {
   const event = e.payload;
   const { key } = event;
 
-  if (matchesShortcut('view.pageUp', event, shortcutPlatform) || matchesShortcut('view.pageDown', event, shortcutPlatform)) {
+  if (matchesShortcut('view.pageUp', event, shortcutPlatform, config.shortcutBindings) || matchesShortcut('view.pageDown', event, shortcutPlatform, config.shortcutBindings)) {
     if (getActivePreviewMode() !== 'none' || isSlideShow.value || selectedItemIndex.value < 0) return;
     checkUnsavedChanges(() => {
-      const direction = matchesShortcut('view.pageUp', event, shortcutPlatform) ? 'up' : 'down';
+      const direction = matchesShortcut('view.pageUp', event, shortcutPlatform, config.shortcutBindings) ? 'up' : 'down';
       const nextIndex = gridViewRef.value?.getNextItemIndex(selectedItemIndex.value, direction, true);
       if (nextIndex !== undefined && nextIndex >= 0) selectedItemIndex.value = nextIndex;
     });
@@ -5595,8 +5604,8 @@ const handleKeyDown = (e: any) => {
   }
 
   // Disable global shortcuts during slideshow except close for safety.
-  if (isSlideShow.value && !matchesShortcut('view.close', event, shortcutPlatform) &&
-    !(showQuickView.value && (key === ' ' || key === 'Space') && matchesShortcut('view.quickPreview', event, shortcutPlatform))) {
+  if (isSlideShow.value && !matchesShortcut('view.close', event, shortcutPlatform, config.shortcutBindings) &&
+    !(showQuickView.value && matchesShortcut('view.quickPreview', event, shortcutPlatform, config.shortcutBindings))) {
     return;
   }
 
@@ -5606,7 +5615,7 @@ const handleKeyDown = (e: any) => {
     return;
   }
 
-  if (matchesShortcut('file.openNewWindow', event, shortcutPlatform)) {
+  if (matchesShortcut('file.openNewWindow', event, shortcutPlatform, config.shortcutBindings)) {
     if (selectMode.value && selectedCount.value === 0) return;
     openImageViewer(selectedItemIndex.value, true);
   } else if (
@@ -5614,37 +5623,37 @@ const handleKeyDown = (e: any) => {
     selectedItemIndex.value >= 0 &&
     selectedItemIndex.value < fileList.value.length &&
     fileList.value.length > 0 &&
-    matchesShortcut('file.rename', event, shortcutPlatform)
+    matchesShortcut('file.rename', event, shortcutPlatform, config.shortcutBindings)
   ) {
     // GridView may consume Enter before Content's DOM keydown handler on macOS.
     // Handle the shortcut in the capture/global channel as a fallback.
     clickRename();
-  } else if (matchesShortcut('file.copyPath', event, shortcutPlatform)) {
+  } else if (matchesShortcut('file.copyPath', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault?.();
     if (!event.repeat) void clickCopyFilePaths();
-  } else if (matchesShortcut('file.copy', event, shortcutPlatform)) {
+  } else if (matchesShortcut('file.copy', event, shortcutPlatform, config.shortcutBindings)) {
     if (selectMode.value && selectedCount.value === 0) return;
     event.preventDefault?.();
     if (!event.repeat) void clickCopyImages(fileList.value[selectedItemIndex.value]);
   // macOS handles Cmd+Arrow in App's capture listener before the content DOM handler.
-  } else if (isMac && matchesShortcut('view.first', event, shortcutPlatform)) {
+  } else if (isMac && matchesShortcut('view.first', event, shortcutPlatform, config.shortcutBindings)) {
     keyActions.Home();
-  } else if (isMac && matchesShortcut('view.last', event, shortcutPlatform)) {
+  } else if (isMac && matchesShortcut('view.last', event, shortcutPlatform, config.shortcutBindings)) {
     keyActions.End();
-  } else if (matchesShortcut('file.editImage', event, shortcutPlatform)) {
+  } else if (matchesShortcut('file.editImage', event, shortcutPlatform, config.shortcutBindings)) {
     if (selectMode.value && selectedCount.value === 0) return;
     const file = fileList.value[selectedItemIndex.value];
     if (file && (file.file_type === 1 || file.file_type === 3)) {
       void openImageEditor(selectedItemIndex.value);
     }
-  } else if (matchesShortcut('file.deletePermanently', event, shortcutPlatform)) {
+  } else if (matchesShortcut('file.deletePermanently', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault?.();
     if (!event.repeat) void openFileDeletion('permanent');
-  } else if (matchesShortcut('file.trash', event, shortcutPlatform)) {
+  } else if (matchesShortcut('file.trash', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault?.();
     if (!event.repeat) void openFileDeletion('trash');
-  } else if (key === 'ArrowUp' || key === 'ArrowDown') {
-    if (event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !isFilmstripView.value
+  } else if ((key === 'ArrowUp' || key === 'ArrowDown') && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    if (event.shiftKey && !isFilmstripView.value
       && toggleKeyboardSelection(key === 'ArrowDown' ? 'down' : 'up')) return;
     (keyActions as any)[key]();
   }

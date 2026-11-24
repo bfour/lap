@@ -215,7 +215,7 @@ import { useToast } from '@/common/toast';
 import { useUIStore } from '@/stores/uiStore';
 import { config, libConfig } from '@/common/config';
 import { isWin, isMac, isLinux, copyFilePaths, getClipboardItemPaths, getMediaItemSize, getSlideShowInterval, SCALE_VALUES } from '@/common/utils';
-import { matchesShortcut, ShortcutActionId, ShortcutPlatform, VIEW_BACKGROUND_SHORTCUTS } from '@/common/shortcuts';
+import { matchesShortcut, shouldAdvanceShortcut, ShortcutActionId, ShortcutPlatform, VIEW_BACKGROUND_SHORTCUTS } from '@/common/shortcuts';
 import { createMetadataSyncTracker, getMatchingPaneFileInfo } from '@/common/metadataSync';
 import { handleVideoPlaybackShortcut, handleVideoEscapeShortcut } from '@/common/video';
 import {
@@ -647,22 +647,24 @@ function handleVideoSpaceKeyDown(event: KeyboardEvent) {
   if (uiStore.inputStack.length > 0 || getFileInfoByPane(getActivePane())?.file_type !== 2) return;
   handleVideoEscapeShortcut(event, shortcutPlatform, () => closeWindow());
   if (event.defaultPrevented) return;
-  handleVideoPlaybackShortcut(event, shortcutPlatform, () => getViewerRef(getActivePane())?.togglePlay?.());
+  handleVideoPlaybackShortcut(event, shortcutPlatform, () => getViewerRef(getActivePane())?.togglePlay?.(), config.shortcutBindings);
 }
 
 function handleKeyDown(event: KeyboardEvent) {
-  if(uiStore.inputStack.length > 0) {
+  if (event.defaultPrevented || event.isComposing || uiStore.inputStack.length > 0) {
     return;
   }
 
   const isEditingText = event.target instanceof HTMLElement
     && (event.target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName));
-  if (!isEditingText && matchesShortcut('view.toggleFullscreen', event, shortcutPlatform)) {
+  if (isEditingText) return;
+
+  if (matchesShortcut('view.toggleFullscreen', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (!event.repeat) toggleNativeFullScreen();
     return;
   }
-  if (matchesShortcut('file.copyPath', event, shortcutPlatform) && !isEditingText) {
+  if (matchesShortcut('file.copyPath', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (!event.repeat) void copyActiveFilePath();
     return;
@@ -682,35 +684,41 @@ function handleKeyDown(event: KeyboardEvent) {
   // Keep only close and background shortcuts available during slideshow.
   if (
     isSlideShow.value &&
-    !matchesShortcut('view.close', event, shortcutPlatform) &&
-    !matchesShortcut('view.cycleBackground', event, shortcutPlatform) &&
+    !matchesShortcut('view.close', event, shortcutPlatform, config.shortcutBindings) &&
+    !matchesShortcut('view.cycleBackground', event, shortcutPlatform, config.shortcutBindings) &&
     getMatchedViewBackground(event) === null
   ) {
     return;
   }
 
-  if (matchesShortcut('file.copy', event, shortcutPlatform) && !isEditingText) {
+  if (matchesShortcut('file.copy', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (!event.repeat) void copyActiveFiles();
     return;
   }
 
   const ratingShortcut = getMatchedRating(event);
-  if (ratingShortcut !== null) {
+  if (ratingShortcut) {
     event.preventDefault();
-    if (!event.repeat) void setCurrentFileRating(ratingShortcut, getActiveFilePane(), event.shiftKey);
+    if (!event.repeat) {
+      const advance = shouldAdvanceShortcut(ratingShortcut.actionId, event, shortcutPlatform, config.shortcutBindings);
+      void setCurrentFileRating(ratingShortcut.rating, getActiveFilePane(), advance);
+    }
     return;
   }
 
   const cullingShortcut = getMatchedCulling(event);
-  if (cullingShortcut !== null) {
+  if (cullingShortcut) {
     event.preventDefault();
-    if (!event.repeat) void setCurrentFileCullingFlag(cullingShortcut, getActiveFilePane(), event.shiftKey);
+    if (!event.repeat) {
+      const advance = shouldAdvanceShortcut(cullingShortcut.actionId, event, shortcutPlatform, config.shortcutBindings);
+      void setCurrentFileCullingFlag(cullingShortcut.cullingFlag, getActiveFilePane(), advance);
+    }
     return;
   }
 
 
-  if (matchesShortcut('view.cycleBackground', event, shortcutPlatform)) {
+  if (matchesShortcut('view.cycleBackground', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     config.cycleViewBackground();
     void emit('settings-viewBackground-changed', config.settings.viewBackground);
@@ -724,51 +732,51 @@ function handleKeyDown(event: KeyboardEvent) {
     return;
   }
 
-  if (matchesShortcut('view.toggleAfAreas', event, shortcutPlatform)) {
-    const target = event.target as HTMLElement | null;
-    if (event.defaultPrevented || target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName || '')) return;
+  if (matchesShortcut('view.toggleAfAreas', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (!event.repeat) getViewerRef(getActivePane())?.toggleAfAreas?.();
     return;
   }
 
-  if (matchesShortcut('meta.favorite', event, shortcutPlatform)) {
+  if (matchesShortcut('meta.favorite', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
-    if (!event.repeat) void toggleFavorite(getActiveFilePane(), event.shiftKey);
+    if (!event.repeat) {
+      void toggleFavorite(getActiveFilePane(), shouldAdvanceShortcut('meta.favorite', event, shortcutPlatform, config.shortcutBindings));
+    }
     return;
   }
 
-  if (matchesShortcut('meta.tag', event, shortcutPlatform)) {
+  if (matchesShortcut('meta.tag', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     clickTag(getActiveFilePane());
     return;
   }
 
-  if (matchesShortcut('meta.edit', event, shortcutPlatform)) {
+  if (matchesShortcut('meta.edit', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     if (!event.repeat) openCommentEditor(getActiveFilePane());
     return;
   }
 
-  if (matchesShortcut('meta.collection', event, shortcutPlatform)) {
+  if (matchesShortcut('meta.collection', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     clickAddToCollection(getActiveFilePane());
     return;
   }
 
-  if (!isEditingText && matchesShortcut('view.cycleRawPreview', event, shortcutPlatform)) {
+  if (matchesShortcut('view.cycleRawPreview', event, shortcutPlatform, config.shortcutBindings)) {
     if (!event.repeat && getViewerRef(getActivePane())?.cycleRawPreview?.()) event.preventDefault();
     return;
   }
 
-  if (matchesShortcut('meta.rotate', event, shortcutPlatform)
-    || matchesShortcut('meta.rotateCounterclockwise', event, shortcutPlatform)) {
+  const rotateCounterclockwise = matchesShortcut('meta.rotateCounterclockwise', event, shortcutPlatform, config.shortcutBindings);
+  if (rotateCounterclockwise || matchesShortcut('meta.rotate', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
-    void clickRotate(getActiveFilePane(), event.shiftKey ? -90 : 90);
+    void clickRotate(getActiveFilePane(), rotateCounterclockwise ? -90 : 90);
     return;
   }
 
-  if (matchesShortcut('view.togglePane', event, shortcutPlatform) && splitCount.value > 1) {
+  if (matchesShortcut('view.togglePane', event, shortcutPlatform, config.shortcutBindings) && splitCount.value > 1) {
     event.preventDefault();
     const panes = getAvailablePanes();
     if (panes.length === 0) return;
@@ -799,17 +807,15 @@ const cullingActions: Array<{ actionId: ShortcutActionId; cullingFlag: number }>
 ];
 
 function getMatchedRating(event: KeyboardEvent) {
-  const match = ratingActions.find(({ actionId }) => matchesShortcut(actionId, event, shortcutPlatform));
-  return match ? match.rating : null;
+  return ratingActions.find(({ actionId }) => matchesShortcut(actionId, event, shortcutPlatform, config.shortcutBindings));
 }
 
 function getMatchedCulling(event: KeyboardEvent) {
-  const match = cullingActions.find(({ actionId }) => matchesShortcut(actionId, event, shortcutPlatform));
-  return match ? match.cullingFlag : null;
+  return cullingActions.find(({ actionId }) => matchesShortcut(actionId, event, shortcutPlatform, config.shortcutBindings));
 }
 
 function getMatchedViewBackground(event: KeyboardEvent): number | null {
-  const match = VIEW_BACKGROUND_SHORTCUTS.find(({ actionId }) => matchesShortcut(actionId, event, shortcutPlatform));
+  const match = VIEW_BACKGROUND_SHORTCUTS.find(({ actionId }) => matchesShortcut(actionId, event, shortcutPlatform, config.shortcutBindings));
   return match?.value ?? null;
 }
 
@@ -840,11 +846,7 @@ const viewActionOrder: ShortcutActionId[] = [
 ];
 
 function getMatchedViewAction(event: KeyboardEvent) {
-  if (isMac && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-    if (event.key === 'ArrowUp') return 'view.first';
-    if (event.key === 'ArrowDown') return 'view.last';
-  }
-  return viewActionOrder.find((actionId) => matchesShortcut(actionId, event, shortcutPlatform));
+  return viewActionOrder.find((actionId) => matchesShortcut(actionId, event, shortcutPlatform, config.shortcutBindings));
 }
 
 function getActivePane(): Pane {

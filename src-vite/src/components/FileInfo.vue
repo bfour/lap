@@ -152,7 +152,7 @@
           <IconRight class="w-3 h-3 transition-transform duration-200" :class="{ 'rotate-90': showOrganizationPanel }" />
           <span class="font-bold uppercase text-xs tracking-wide text-base-content/30">{{ $t('file_info.organization') }}</span>
         </button>
-          <TButton :icon="IconEdit" :disabled="!editableMetadataFields.some(field => fieldVisible(`organization.${field.key}`))" :tooltip="$t('file_info.edit_metadata')" :shortcut="getShortcutLabel('meta.edit')" button-size="small" @click.stop="emit('editMetadata', 'e_title')" />
+          <TButton :icon="IconEdit" :disabled="!editableMetadataFields.some(field => fieldVisible(`organization.${field.key}`))" :tooltip="$t('file_info.edit_metadata')" :shortcut="getShortcutLabel('meta.edit', DEFAULT_PLATFORM, config.shortcutBindings)" button-size="small" @click.stop="emit('editMetadata', 'e_title')" />
         </div>
         <div class="shrink-0">
           <div v-if="showOrganizationPanel" class="pt-3 space-y-1.5">
@@ -329,7 +329,7 @@
                 <button
                   type="button"
                   class="shrink-0 p-1 cursor-pointer hover:text-primary"
-                  :title="`${t('file_info.copy_path')} (${getShortcutLabel('file.copyPath')})`"
+                  :title="`${t('file_info.copy_path')} (${getShortcutLabel('file.copyPath', DEFAULT_PLATFORM, config.shortcutBindings)})`"
                   :aria-label="t('file_info.copy_path')"
                   @click.stop="copyInfoFilePath"
                 >
@@ -535,7 +535,7 @@
 <script setup lang="ts">
 import AssignTagsPanel from './AssignTagsPanel.vue';
 import FileInfoFieldsDialog from '@/components/FileInfoFieldsDialog.vue';
-import { getShortcutLabel } from '@/common/shortcuts';
+import { DEFAULT_PLATFORM, getShortcutLabel } from '@/common/shortcuts';
 import { editableMetadataFields, normalizeFileInfoFields } from '@/common/fileInfoFields';
 import ImageNavigator from '@/components/ImageNavigator.vue';
 import { invoke } from '@tauri-apps/api/core';

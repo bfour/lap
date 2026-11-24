@@ -73,8 +73,10 @@ test('language configuration changes only after messages load; latest choice win
   const storeModule = new vm.SourceTextModule(storeSource, { context: f.context });
   await storeModule.link(specifier => {
     if (specifier === 'pinia') return f.synthetic({ defineStore });
+    if (specifier === '@tauri-apps/api/event') return f.synthetic({ emit: async () => {} });
     if (specifier === '@/common/i18n') return f.module;
     if (specifier === '@/common/fileInfoFields') return f.synthetic({ defaultFileInfoFields });
+    if (specifier === '@/common/shortcuts') return f.synthetic({ normalizeShortcutOverrides: () => ({}) });
     return f.synthetic({ SIDEBAR: { ALBUM: 1 }, MAP_MARKER_SIZES: [10, 20] });
   });
   await storeModule.evaluate();

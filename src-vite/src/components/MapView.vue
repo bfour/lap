@@ -42,6 +42,7 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { config } from '@/common/config'
+import { DEFAULT_PLATFORM, matchesShortcut } from '@/common/shortcuts'
 import { openExternalUrl } from '@/common/api'
 import { createTileLayerGroup, getGlobalMapTheme, getMapTheme } from '@/common/mapProviders'
 import { isMac } from '@/common/utils'
@@ -229,20 +230,17 @@ async function openAppleMaps() {
 }
 
 function handleMapKeyDown(event) {
+  if (event.defaultPrevented || event.isComposing || !uiStore.mapActive || uiStore.inputStack.length > 0) return
   const target = event.target
-  if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable) {
+  if (target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-shortcut-capture]')) {
     return
   }
 
-  if (!uiStore.mapActive || event.metaKey || event.ctrlKey || event.altKey) {
-    return
-  }
-
-  if (event.key === '=') {
+  if (matchesShortcut('view.zoomIn', event, DEFAULT_PLATFORM, config.shortcutBindings)) {
     event.preventDefault()
     event.stopPropagation()
     zoomIn()
-  } else if (event.key === '-') {
+  } else if (matchesShortcut('view.zoomOut', event, DEFAULT_PLATFORM, config.shortcutBindings)) {
     event.preventDefault()
     event.stopPropagation()
     zoomOut()

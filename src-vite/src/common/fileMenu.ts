@@ -72,7 +72,7 @@ export const useFileMenuItems = (
     if (requiresAvailableFile(actionName) && actionUnavailable(actionName, file.value)) return;
     onAction(actionName);
   }, { actionName });
-  const shortcut = (actionId: ShortcutActionId) => getShortcutLabel(actionId, DEFAULT_PLATFORM);
+  const shortcut = (actionId: ShortcutActionId) => getShortcutLabel(actionId, DEFAULT_PLATFORM, config.shortcutBindings);
 
   // Resolves a label string against the current locale, or returns the fallback if none was found.
   const menuLabel = ([key, fallback]: readonly [string, string]) =>

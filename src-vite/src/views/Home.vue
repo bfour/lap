@@ -557,7 +557,8 @@ onBeforeUnmount(() => {
 
 function handleHomeKeyDown(event: KeyboardEvent) {
   const target = event.target as HTMLElement | null;
-  if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable) {
+  if (event.isComposing || target?.closest?.('[data-shortcut-capture]')
+    || target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.tagName === 'SELECT' || target?.isContentEditable) {
     return;
   }
 
@@ -577,7 +578,7 @@ function handleHomeKeyDown(event: KeyboardEvent) {
     return;
   }
 
-  if (matchesShortcut('app.search', event, shortcutPlatform)) {
+  if (matchesShortcut('app.search', event, shortcutPlatform, config.shortcutBindings)) {
     event.preventDefault();
     event.stopPropagation();
     if (!libraryEmpty.value && !databaseCorrupted.value) {
@@ -591,7 +592,7 @@ function handleHomeKeyDown(event: KeyboardEvent) {
     return;
   }
 
-  if (!matchesShortcut('app.sidebar.toggle', event, shortcutPlatform)) {
+  if (!matchesShortcut('app.sidebar.toggle', event, shortcutPlatform, config.shortcutBindings)) {
     return;
   }
 

@@ -8,32 +8,47 @@ import ts from 'typescript';
 
 const fieldSource = readFileSync(new URL('../src/common/fileInfoFields.ts', import.meta.url), 'utf8');
 const { defaultFileInfoFields } = await import(`data:text/javascript;base64,${Buffer.from(ts.transpile(fieldSource, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext })).toString('base64')}`);
+const shortcutSource = readFileSync(new URL('../src/common/shortcuts.ts', import.meta.url), 'utf8');
+const { normalizeShortcutOverrides } = await import(`data:text/javascript;base64,${Buffer.from(ts.transpile(shortcutSource, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext })).toString('base64')}`);
 const storeSource = readFileSync(new URL('../src/stores/configStore.js', import.meta.url), 'utf8');
-const useConfig = new Function('defineStore', 'SIDEBAR', 'MAP_MARKER_SIZES', 'defaultFileInfoFields',
-  storeSource.replace(/^import .*;\n/gm, '').replace('export const useConfigStore', 'const useConfigStore')
-  + ';return useConfigStore;')(defineStore, { ALBUM: 1 }, [], defaultFileInfoFields);
+const loadStore = new Function('defineStore', 'SIDEBAR', 'MAP_MARKER_SIZES', 'defaultFileInfoFields', 'normalizeShortcutOverrides', 'emit',
+  storeSource.replace(/^import .*;\n/gm, '').replace(/^export const /gm, 'const ')
+  + ';return { useConfigStore, SHORTCUT_BINDINGS_CHANGED };');
 const mainSource = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
-const listenerStart = mainSource.indexOf("listen('af-area-display-changed'");
-const listener = mainSource.slice(listenerStart, mainSource.indexOf('\n})', listenerStart) + 3);
+function extractListener(prefix) {
+  const start = mainSource.indexOf(prefix);
+  return mainSource.slice(start, mainSource.indexOf('\n})', start) + 3);
+}
+const afListener = extractListener("listen('af-area-display-changed'");
+const shortcutListener = extractListener('listen(SHORTCUT_BINDINGS_CHANGED');
 const viewerSource = readFileSync(new URL('../src/components/MediaViewer.vue', import.meta.url), 'utf8');
 const preference = viewerSource.slice(viewerSource.indexOf('const showAfAreas = computed('), viewerSource.indexOf('const afAreaFeedbackRequest ='));
 
 function fixture(legacy = false) {
   const data = new Map(legacy ? [['configStore', JSON.stringify({ mediaViewer: { isPinned: false } })]] : []);
   const storage = { getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key, value) };
-  const listeners = [];
+  const listeners = new Map();
   const events = [];
+  function listen(name, callback) {
+    if (!listeners.has(name)) listeners.set(name, []);
+    listeners.get(name).push(callback);
+  }
+  async function emit(name, payload) {
+    events.push({ name, payload });
+    for (const callback of listeners.get(name) ?? []) callback({ payload });
+  }
+  const { useConfigStore, SHORTCUT_BINDINGS_CHANGED } = loadStore(
+    defineStore, { ALBUM: 1 }, [], defaultFileInfoFields, normalizeShortcutOverrides, emit,
+  );
   function windowStore() {
     const pinia = createPinia();
     pinia.use(createPersistedState({ storage }));
     createApp({}).use(pinia);
-    const config = useConfig(pinia);
-    new Function('listen', 'config', listener)((name, callback) => listeners.push(callback), config);
+    const config = useConfigStore(pinia);
+    new Function('listen', 'config', afListener)(listen, config);
+    new Function('listen', 'config', 'SHORTCUT_BINDINGS_CHANGED', shortcutListener)(listen, config, SHORTCUT_BINDINGS_CHANGED);
     const toggle = new Function('computed', 'config', 'tauriEmit', ts.transpile(preference, {target: ts.ScriptTarget.ES2022})
-      + ';return showAfAreas;')(computed, config, async (name, payload) => {
-        events.push({ name, payload });
-        for (const callback of listeners) callback({ payload });
-      });
+      + ';return showAfAreas;')(computed, config, emit);
     return { config, toggle };
   }
   return { windowStore, events };
@@ -51,6 +66,28 @@ test('AF display defaults to off for existing preferences and persists both togg
   reopened.toggle.value = false;
   await nextTick();
   assert.equal(f.windowStore().toggle.value, false);
+});
+
+test('shortcut changes sync to open windows and survive unrelated writes and reopening', async () => {
+  const f = fixture(true);
+  const settings = f.windowStore();
+  const main = f.windowStore();
+  const action = 'app.sidebar.toggle';
+  const binding = { key: 'j', code: 'KeyJ', modifiers: ['ctrl'] };
+  assert.deepEqual(settings.config.shortcutBindings, {});
+
+  settings.config.setShortcutBinding(action, 'linux', binding);
+  assert.deepEqual(main.config.shortcutBindings.linux[action], binding);
+  main.config.mediaViewer.isPinned = true;
+  await nextTick();
+  assert.deepEqual(f.windowStore().config.shortcutBindings.linux[action], binding);
+  assert.equal(f.events.length, 1);
+
+  settings.config.resetShortcutBindings('linux');
+  await nextTick();
+  assert.deepEqual(main.config.shortcutBindings, {});
+  assert.deepEqual(f.windowStore().config.shortcutBindings, {});
+  assert.equal(f.events.length, 2);
 });
 
 test('all viewer panes and windows retain the preference across unrelated config writes without event loops', async () => {

@@ -19,7 +19,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { clearIndexRecoveryInfo } from '@/common/api';
 import { isMac, SCALE_VALUES } from '@/common/utils';
 import { useAppTheme } from '@/composables/useAppearance';
-import { matchesShortcut } from '@/common/shortcuts';
+import { DEFAULT_PLATFORM, hasShortcutOverride, matchesShortcut } from '@/common/shortcuts';
 import ToastContainer from '@/components/ToastContainer.vue';
 
 const libConfig = useLibraryStore();
@@ -151,11 +151,15 @@ onUnmounted(async () => {
 });
 
 const handleKeyDown = (event) => {
+  if (event.defaultPrevented || event.isComposing || event.target?.closest?.('[data-shortcut-capture]')) {
+    return;
+  }
+
   if (handleMainWindowScaleShortcut(event)) {
     return;
   }
 
-  if (!isMac && matchesShortcut('app.preferences', event)) {
+  if (!isMac && matchesAppShortcut('app.preferences', event)) {
     event.preventDefault();
     event.stopPropagation();
     emit('app-open-preferences');
@@ -198,13 +202,21 @@ function applyMainWindowScale(scale) {
   document.documentElement.style.fontSize = `${normalizedScale * 16}px`;
 }
 
+function matchesAppShortcut(actionId, event) {
+  if (hasShortcutOverride(actionId, DEFAULT_PLATFORM, config.shortcutBindings)
+    && event.target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) {
+    return false;
+  }
+  return matchesShortcut(actionId, event, DEFAULT_PLATFORM, config.shortcutBindings);
+}
+
 function handleMainWindowScaleShortcut(event) {
   const win = getCurrentWebviewWindow();
   if (win.label !== 'main') return false;
 
-  const isScaleUp = matchesShortcut('app.scale.increase', event);
-  const isScaleDown = matchesShortcut('app.scale.decrease', event);
-  const isScaleReset = matchesShortcut('app.scale.reset', event);
+  const isScaleUp = matchesAppShortcut('app.scale.increase', event);
+  const isScaleDown = matchesAppShortcut('app.scale.decrease', event);
+  const isScaleReset = matchesAppShortcut('app.scale.reset', event);
 
   if (!isScaleUp && !isScaleDown && !isScaleReset) return false;
 

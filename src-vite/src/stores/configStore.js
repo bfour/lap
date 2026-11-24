@@ -2,14 +2,20 @@
  * Config Store - Global application configuration
 */
 import { defineStore } from 'pinia';
+import { emit } from '@tauri-apps/api/event';
 import { i18n, loadLanguage } from '@/common/i18n';
 let languageRequest = 0;
 let pendingUserLanguageRequest = 0;
 import { SIDEBAR, MAP_MARKER_SIZES } from '@/common/constants';
 import { defaultFileInfoFields } from '@/common/fileInfoFields';
+import { normalizeShortcutOverrides } from '@/common/shortcuts';
+
+export const SHORTCUT_BINDINGS_CHANGED = 'shortcut-bindings-changed';
 
 export const useConfigStore = defineStore('configStore', {
   state: () => ({
+    shortcutBindings: {},
+
     main: {
       sidebarIndex: SIDEBAR.ALBUM, // toolbar index
       maxLibraryCount: 20,        // max library count
@@ -251,6 +257,33 @@ export const useConfigStore = defineStore('configStore', {
   },
 
   actions: {
+    applyShortcutBindings(bindings) {
+      const normalized = normalizeShortcutOverrides(bindings);
+      if (JSON.stringify(this.shortcutBindings) !== JSON.stringify(normalized)) {
+        this.shortcutBindings = normalized;
+      }
+    },
+    saveShortcutBindings(bindings) {
+      this.applyShortcutBindings(bindings);
+      void emit(SHORTCUT_BINDINGS_CHANGED, this.shortcutBindings).catch(console.error);
+    },
+    setShortcutBinding(action, platform, binding) {
+      this.saveShortcutBindings({
+        ...this.shortcutBindings,
+        [platform]: { ...this.shortcutBindings[platform], [action]: binding },
+      });
+    },
+    resetShortcutBinding(action, platform) {
+      const bindings = { ...this.shortcutBindings[platform] };
+      delete bindings[action];
+      this.saveShortcutBindings({ ...this.shortcutBindings, [platform]: bindings });
+    },
+    resetShortcutBindings(platform) {
+      const bindings = { ...this.shortcutBindings };
+      delete bindings[platform];
+      this.saveShortcutBindings(bindings);
+    },
+
     // general settings
     setAppearance(appearance) {
       this.settings.appearance = appearance;
@@ -454,6 +487,8 @@ export const useConfigStore = defineStore('configStore', {
       serialize: JSON.stringify,
       deserialize: (value) => {
         const state = JSON.parse(value);
+        if (!state || typeof state !== 'object') return {};
+        state.shortcutBindings = normalizeShortcutOverrides(state.shortcutBindings);
         const settings = state?.settings;
         if (settings) {
           // Existing installations already have a language choice; do not replace it.

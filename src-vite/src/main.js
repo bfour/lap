@@ -13,7 +13,7 @@ import 'cally'
 import router from '@/common/router'
 import App from '@/App.vue'
 import { normalizeStatusBarFields } from '@/common/statusBarFields'
-import { useConfigStore } from '@/stores/configStore'
+import { SHORTCUT_BINDINGS_CHANGED, useConfigStore } from '@/stores/configStore'
 import '@/assets/app.css'
 
 performance.mark('startup-frontend-started')
@@ -33,6 +33,10 @@ let settingsSyncRequest = 0
 const originalMediaReady = initializeOriginalMedia().then(() => true, error => {
   console.error(error)
   return false
+})
+
+listen(SHORTCUT_BINDINGS_CHANGED, ({ payload }) => {
+  config.applyShortcutBindings(payload)
 })
 
 listen('status-bar-fields-changed', ({ payload }) => {

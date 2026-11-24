@@ -76,7 +76,8 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { getShortcutLabel, type ShortcutActionId } from '@/common/shortcuts';
+import { config } from '@/common/config';
+import { DEFAULT_PLATFORM, getShortcutLabel, type ShortcutActionId } from '@/common/shortcuts';
 import { IconFlag, IconFlagFilled, IconFlagOff, IconHeart, IconHeartFilled, IconStar, IconStarFilled } from '@/common/icons';
 
 const props = withDefaults(defineProps<{
@@ -123,7 +124,7 @@ const ratingShortcuts: ShortcutActionId[] = [
 ];
 
 function withShortcut(label: string, action: ShortcutActionId) {
-  const shortcut = !props.disabled && getShortcutLabel(action);
+  const shortcut = !props.disabled && getShortcutLabel(action, DEFAULT_PLATFORM, config.shortcutBindings);
   return shortcut ? `${label} (${shortcut})` : label;
 }
 
