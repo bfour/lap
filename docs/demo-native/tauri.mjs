@@ -20,6 +20,7 @@ try {
 } catch {}
 db.tagNames ||= [...new Set(db.photos.flatMap((p) => p.tags))];
 db.tagParents ||= {};
+db.duplicateKeeps ||= {};
 if (!db.tagNames.includes("Outdoors") && !db.tagNames.includes(null)) {
   const parent = db.tagNames.push("Outdoors");
   for (const name of ["Nature", "Landscape"]) {
@@ -32,7 +33,7 @@ let libraryState = db.libraryState || null,
   similarScanned = false;
 let thumbnailCacheLocation = { path: "/Browser/Lap Demo/Cache", custom: false };
 const thumbnailCacheMigrations = new Map();
-const keeps = new Map(),
+const similarKeeps = new Map(),
   listeners = new Map();
 export const commands = [];
 const save = () => localStorage.setItem(KEY, JSON.stringify(db));
@@ -396,29 +397,48 @@ function groups(similar = false) {
             ? 2
             : 3
         : Number(g[0].hash.split("-").at(-1));
+      const savedKeeps = similar
+        ? [similarKeeps.get(groupId)]
+        : db.duplicateKeeps[groupId] ?? [];
+      const keepIds = new Set(savedKeeps.filter((id) => g.some((file) => file.id === id)));
+      const reviewed = keepIds.size > 0;
+      if (!reviewed) keepIds.add(g[0].id);
       return {
         id: groupId,
         hash: g[0].hash || "sample",
         file_size: nativeFile(g[0]).size,
         file_count: g.length,
         total_size: g.reduce((s, p) => s + nativeFile(p).size, 0),
-        reviewed: keeps.has(groupId) ? 1 : 0,
+        reviewed: Number(reviewed),
         updated_at: 1740000000,
         representative: nativeFile(g[0]),
         files: g.map(nativeFile),
-        items: g.map((p, j) => ({
-          group_id: groupId,
-          file_id: p.id,
-          is_keep: keeps.get(groupId)
-            ? Number(keeps.get(groupId) === p.id)
-            : Number(j === 0),
-          can_delete: true,
-          is_selected: 0,
-          score: 1 - j * 0.01,
-          file: nativeFile(p),
-        })),
+        items: g.map((p, j) => {
+          const keep = keepIds.has(p.id);
+          return {
+            group_id: groupId,
+            file_id: p.id,
+            is_keep: Number(keep),
+            can_set_keep: !keep || keepIds.size > 1,
+            can_delete: !keep,
+            is_selected: 0,
+            score: 1 - j * 0.01,
+            file: nativeFile(p),
+          };
+        }),
       };
     });
+}
+
+function dedupDeletionTargets(request) {
+  const similar = request.similarGroupId != null;
+  const eligibleGroups = groups(similar).filter((group) => !similar || group.id === request.similarGroupId);
+  const removableIds = new Set(eligibleGroups.flatMap((group) =>
+    group.items.filter((item) => item.can_delete).map((item) => item.file_id),
+  ));
+  return request.deleteAll
+    ? [...removableIds]
+    : (request.fileIds ?? []).filter((id) => removableIds.has(id));
 }
 export async function listen(name, callback) {
   if (!listeners.has(name)) listeners.set(name, new Set());
@@ -943,19 +963,19 @@ export async function invoke(command, args = {}) {
     return nativeFile(p);
   }
   if (command === "batch_delete_files" || command === "dedup_delete") {
+    const request = args.request ?? {};
     const requested = command === "dedup_delete"
-      ? args.request?.fileIds ?? groups().flatMap((group) =>
-        group.items.filter((item) => !item.is_keep).map((item) => item.file_id),
-      )
+      ? dedupDeletionTargets(request)
       : (args.files || []).map((file) => file.fileId);
     const targets = [...new Set(requested)].filter((id) => {
       const file = photo(id);
       return file && !file.deleted;
     });
-    if (args.request?.preview) {
+    const token = targets.join(",");
+    if (request.preview) {
       return {
         preview: {
-          token: targets.join(","),
+          token,
           itemCount: targets.length,
           rawCompanionCount: 0,
           fileCount: targets.length,
@@ -963,6 +983,9 @@ export async function invoke(command, args = {}) {
           bytes: targets.reduce((sum, id) => sum + (nativeFile(photo(id))?.size ?? 0), 0),
         },
       };
+    }
+    if (command === "dedup_delete" && request.planToken !== token) {
+      throw new Error("dedup_plan_changed: Open the confirmation again.");
     }
     targets.forEach((id) => {
       if (photo(id)) photo(id).deleted = true;
@@ -1270,18 +1293,28 @@ export async function invoke(command, args = {}) {
   if (command === "dedup_list_groups") return dedupScanned ? groups() : [];
   if (command === "dedup_get_group_items")
     return groups().find((group) => group.id === args.groupId)?.items ?? [];
-  if (command === "dedup_get_overview")
+  if (command === "dedup_get_overview") {
+    const removable = dedupScanned ? dedupDeletionTargets({ deleteAll: true }) : [];
     return {
       total_groups: dedupScanned ? groups().length : 0,
-      total_files: dedupScanned
-        ? groups().reduce((s, g) => s + g.file_count - 1, 0)
-        : 0,
-      total_reclaimable_bytes: dedupScanned
-        ? groups().reduce((s, g) => s + g.file_size * (g.file_count - 1), 0)
-        : 0,
+      total_files: removable.length,
+      total_reclaimable_bytes: removable.reduce((sum, id) => sum + nativeFile(photo(id)).size, 0),
     };
-  if (command === "dedup_set_keep" || command === "similar_set_keep") {
-    keeps.set(args.groupId, args.fileId);
+  }
+  if (command === "dedup_set_keep") {
+    const group = groups().find(({ id }) => id === args.groupId);
+    const item = group?.items.find(({ file_id }) => file_id === args.fileId);
+    if (!item) throw new Error("The photo is no longer in this duplicate set.");
+    if (args.keep === false && !item.can_set_keep) throw new Error("Keep at least one photo in each set.");
+    const keepIds = new Set(group.items.filter(({ is_keep }) => is_keep).map(({ file_id }) => file_id));
+    if (args.keep === false) keepIds.delete(args.fileId);
+    else keepIds.add(args.fileId);
+    db.duplicateKeeps[args.groupId] = [...keepIds];
+    save();
+    return true;
+  }
+  if (command === "similar_set_keep") {
+    similarKeeps.set(args.groupId, args.fileId);
     return true;
   }
   if (command === "similar_start_scan") {

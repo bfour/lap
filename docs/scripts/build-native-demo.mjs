@@ -104,7 +104,7 @@ await build({
         )?.[1];
         if (component === "DedupPane")
           return code.replace(
-            '<div class="w-full h-full rounded-box',
+            /<div\s+class="w-full h-full rounded-box/,
             '<div data-demo-component="DedupPane" class="w-full h-full rounded-box',
           );
         if (component)
