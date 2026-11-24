@@ -170,14 +170,20 @@ const assert = require("node:assert/strict");
     await tabs.nth(0).click();
     const mode = page
       .locator(".demo-window.settings")
-      .getByText("Color mode", { exact: true })
-      .locator("../..")
-      .locator("select");
+      .getByRole("combobox", { name: "Color mode" });
     await mode.selectOption("0");
     await page.waitForFunction(
       () => document.documentElement.dataset.theme === "light",
     );
+    await page.emulateMedia({ colorScheme: "dark" });
+    await mode.selectOption({ label: "Follow system" });
+    await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+    await page.emulateMedia({ colorScheme: "light" });
+    await page.waitForFunction(() => document.documentElement.dataset.theme === "light");
+    assert.equal(await mode.inputValue(), "2");
     await mode.selectOption("1");
+    await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+    await page.emulateMedia({ colorScheme: null });
     await tabs.nth(1).click();
     const placement = () =>
       page

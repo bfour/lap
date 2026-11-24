@@ -65,7 +65,7 @@
               <div class="flex flex-col gap-0.5 text-sm leading-5">
                 <div>{{ $t('settings.general.appearance') }}</div>
               </div>
-              <select class="select select-bordered select-sm min-w-32" v-model="config.settings.appearance">
+              <select class="select select-bordered select-sm min-w-32" v-model="config.settings.appearance" :aria-label="$t('settings.general.appearance')">
                 <option v-for="(item, index) in appearanceOptions" :key="index" :value="item.value">{{ item.label }}</option>
               </select>
             </div>
