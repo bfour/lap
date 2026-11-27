@@ -8,17 +8,22 @@
       (function() {
         try {
           var config = JSON.parse(localStorage.getItem('configStore'));
-          var isDark = true;
-          if (config && config.settings && config.settings.appearance === 0) {
+          var appearance = config && config.settings ? config.settings.appearance : 2;
+          var isDark;
+          if (appearance === 0) {
             isDark = false;
-          } else if (config && config.settings && config.settings.appearance === 2) {
+          } else if (appearance === 1) {
+            isDark = true;
+          } else {
+            // Follow the system appearance by default.
             isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
           }
-          
+
           var color = isDark ? '#1d232a' : '#ffffff';
           document.documentElement.style.backgroundColor = color;
         } catch (e) {
-          document.documentElement.style.backgroundColor = '#1d232a';
+          document.documentElement.style.backgroundColor =
+            window.matchMedia('(prefers-color-scheme: dark)').matches ? '#1d232a' : '#ffffff';
         }
       })();
     </script>
