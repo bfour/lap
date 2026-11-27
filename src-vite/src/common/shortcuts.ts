@@ -9,6 +9,7 @@ export type ShortcutContext =
   | 'album-list'
   | 'album-folder'
   | 'tag-dialog'
+  | 'dedup'
   | 'map';
 
 export type ShortcutActionId =
@@ -33,6 +34,9 @@ export type ShortcutActionId =
   | 'file.deletePermanently'
   | 'file.reveal'
   | 'file.searchSimilar'
+  | 'dedup.toggleKeep'
+  | 'dedup.deleteSelected'
+  | 'dedup.deleteSet'
   | 'meta.favorite'
   | 'meta.rating.clear'
   | 'meta.rating.one'
@@ -286,6 +290,27 @@ export const SHORTCUTS: readonly ShortcutDefinition[] = [
     id: 'file.searchSimilar',
     contexts: ['content'],
     defaultBindings: [{ code: 'KeyS', allowShift: true, label: 'S' }],
+  },
+  {
+    id: 'dedup.toggleKeep',
+    contexts: ['dedup'],
+    defaultBindings: [{ code: 'KeyL', label: 'L' }],
+  },
+  {
+    id: 'dedup.deleteSelected',
+    contexts: ['dedup'],
+    defaultBindings: [
+      { key: 'Backspace', modifiers: ['meta'], platforms: ['mac'], label: { mac: '⌘⌫' } },
+      { key: 'Delete', platforms: ['windows', 'linux'], label: { windows: 'Del', linux: 'Del' } },
+    ],
+  },
+  {
+    id: 'dedup.deleteSet',
+    contexts: ['dedup'],
+    defaultBindings: [
+      { key: 'Backspace', modifiers: ['meta', 'shift'], platforms: ['mac'], label: { mac: '⇧⌘⌫' } },
+      { key: 'Delete', modifiers: ['shift'], platforms: ['windows', 'linux'], label: { windows: 'Shift+Del', linux: 'Shift+Del' } },
+    ],
   },
   {
     id: 'meta.favorite',
@@ -561,6 +586,21 @@ export function findShortcutMatches(
   return getShortcutsByContext(context)
     .filter((shortcut) => matchesShortcut(shortcut.id, event, platform, overrides))
     .map((shortcut) => shortcut.id);
+}
+
+const DEDUP_ROW_NAVIGATION_KEYS = new Set(['ArrowUp', 'ArrowDown']);
+
+/** Whether the focused Duplicates pane handles this key instead of the global handlers. */
+export function isDedupPaneShortcut(
+  event: ShortcutEventLike & { target?: EventTarget | null },
+  platform: ShortcutPlatform = DEFAULT_PLATFORM,
+  overrides?: ShortcutOverrides,
+): boolean {
+  const target = event.target as { closest?: (selector: string) => unknown } | null | undefined;
+  if (!target?.closest?.('[data-dedup-shortcuts]')) return false;
+  const plain = !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+  return (plain && DEDUP_ROW_NAVIGATION_KEYS.has(event.key))
+    || findShortcutMatches('dedup', event, platform, overrides).length > 0;
 }
 
 export function getShortcutConflicts(

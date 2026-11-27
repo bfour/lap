@@ -3,7 +3,11 @@
     v-if="showKeepRules"
     @cancel="showKeepRules = false"
   />
-  <div class="w-full h-full rounded-box bg-base-200 flex flex-col overflow-hidden">
+  <div
+    class="w-full h-full rounded-box bg-base-200 flex flex-col overflow-hidden"
+    :data-dedup-shortcuts="panelOpen && activeTab === 'duplicates' ? '' : undefined"
+    @keydown="handleDuplicateShortcuts"
+  >
     <div class="my-2 px-2 flex items-center justify-between w-full shrink-0">
       <div class="flex items-center text-sm font-semibold gap-1">
         <button
@@ -345,13 +349,24 @@
           class="min-h-0 shrink-0 flex flex-col border-t border-base-content/5 px-1 py-3 space-y-3"
           :style="{ height: `${config.dedup.duplicateSetsHeight}%` }"
         >
-          <div class="flex items-center gap-2">
+          <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span class="text-[10px] uppercase tracking-widest font-bold text-base-content/30">
               {{ $t('info_panel.dedup.groups_title') }}
             </span>
-            <span class="ml-auto sidebar-item-count">
+            <span class="sidebar-item-count">
               {{ totalGroupCount.toLocaleString() }}
             </span>
+            <select
+              v-model="duplicateGroupSort"
+              class="select select-xs ml-auto w-auto max-w-full"
+              :aria-label="$t('info_panel.dedup.sort_groups')"
+              :title="$t('info_panel.dedup.sort_groups')"
+            >
+              <option value="count_desc">{{ $t('info_panel.dedup.sort_count_desc') }}</option>
+              <option value="size_desc">{{ $t('info_panel.dedup.sort_size_desc') }}</option>
+              <option value="size_asc">{{ $t('info_panel.dedup.sort_size_asc') }}</option>
+              <option value="reclaimable_desc">{{ $t('info_panel.dedup.sort_reclaimable_desc') }}</option>
+            </select>
           </div>
           <div v-if="skippedCloudOnlyCount > 0" class="px-1 text-xs text-base-content/50">
             {{ $t('info_panel.dedup.skipped_cloud_only', { count: skippedCloudOnlyCount.toLocaleString() }) }}
@@ -390,7 +405,7 @@
                   class="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/80 to-transparent px-1.5 pb-1 pt-4 text-left text-[10px] leading-tight text-white/90 opacity-0 transition-opacity group-hover/thumb:opacity-100"
                   :class="{ 'opacity-100': selectedGroupId === group.id }"
                 >
-                  <div>{{ formatFileSize(group.keepItem ? getMediaItemSize(group.keepItem.file) : group.file_size) }}</div>
+                  <div>{{ formatFileSize(getDuplicateGroupFileSize(group)) }}</div>
                   <div v-if="group.keepItem?.file?.width && group.keepItem?.file?.height" class="text-white/70">
                     {{ group.keepItem.file.width }} x {{ group.keepItem.file.height }}
                   </div>
@@ -419,19 +434,33 @@
           <div class="flex flex-wrap gap-1">
             <PanelActionButton
               :icon="isAllGroupDuplicatesSelected(activeGroup.id) ? IconDeselect : IconSelectAll"
-              @click="selectGroupDuplicates(activeGroup.id, activeGroup.keepItem?.file_id || 0)"
+              :disabled="duplicateActionsBusy || !activeGroup.duplicateItems.some(canSelectForDeletion)"
+              @click="selectGroupDuplicates(activeGroup.id)"
             >
               {{ isAllGroupDuplicatesSelected(activeGroup.id) ? $t('menu.select.none') : $t('menu.select.all') }}
             </PanelActionButton>
             <PanelActionButton
               :icon="IconTrash"
-              :disabled="selectedDeleteCount === 0"
+              :disabled="selectedDeleteCount === 0 || duplicateActionsBusy"
+              :title="duplicateActionTitle(checkedDeleteLabel, 'dedup.deleteSelected')"
               danger
               @click="trashSelectedDuplicates(activeGroup.id)"
             >
-              {{ $t(config.settings.fileDeleteBehavior === 'permanent' ? 'menu.file.delete' : 'msgbox.move_to_trash.title') }}
+              {{ checkedDeleteLabel }}
+            </PanelActionButton>
+            <PanelActionButton
+              :icon="IconTrash"
+              :disabled="!activeGroup.duplicateItems.some(canSelectForDeletion) || duplicateActionsBusy"
+              :title="duplicateActionTitle(setDeleteLabel, 'dedup.deleteSet')"
+              danger
+              @click="trashSetDuplicates(activeGroup.id)"
+            >
+              {{ setDeleteLabel }}
             </PanelActionButton>
           </div>
+          <p class="px-1 text-[11px] text-base-content/40">
+            {{ $t('info_panel.dedup.keep_hint') }}
+          </p>
           <TransitionGroup
             :key="activeGroup.id"
             tag="div"
@@ -442,6 +471,7 @@
             <div
               v-for="item in activeGroup.items"
               :key="item.file_id"
+              :data-duplicate-file-id="item.file_id"
               role="button"
               tabindex="0"
               class="group/row w-full rounded-box p-2.5 border text-left transition-colors cursor-pointer"
@@ -458,7 +488,8 @@
                     class="checkbox checkbox-xs disabled:cursor-not-allowed"
                     :class="!canSelectForDeletion(item) ? 'opacity-30' : 'checkbox-primary opacity-70'"
                     :checked="isDupSelected(activeGroup.id, item.file_id)"
-                    :disabled="!canSelectForDeletion(item)"
+                    :disabled="duplicateActionsBusy || !canSelectForDeletion(item)"
+                    :aria-label="$t('info_panel.dedup.select_for_deletion', { name: item.file?.name ?? '' })"
                     @change="toggleDupSelected(activeGroup.id, item.file_id)"
                   />
                 </label>
@@ -481,30 +512,36 @@
                     </span>
                     <IconExclamation v-if="isOriginalUnavailable(item.file)" class="w-3.5 h-3.5 shrink-0 text-warning" />
                   </div>
-                  <div
-                    class="text-[11px] text-base-content/30 truncate"
-                    :title="formatDedupFolderPath(item.file)"
-                  >
-                    {{ formatDedupFolderPath(item.file) }}
-                  </div>
                   <div v-if="item.file?.[preferredDateField] > 0" class="text-[11px] text-base-content/30">
                     {{ $t(`file_info.${preferredDateField}`) }}: {{ formatTimestamp(item.file[preferredDateField], 'date_time') }}
                   </div>
                 </div>
-                <div class="shrink-0 w-16 min-h-10 flex items-center justify-center">
-                  <span v-if="item.is_keep === 1" class="thumb-badge">KEEP</span>
-                  <PanelActionButton
-                    v-else-if="item.can_set_keep !== false"
-                    size="small"
-                    class="transition-opacity"
-                    :class="keepActionClass(item.file_id)"
-                    :title="$t('info_panel.dedup.keep_label')"
-                    :aria-label="$t('info_panel.dedup.keep_label')"
-                    @click.stop="setKeep(activeGroup.id, item.file_id)"
-                  >
-                    {{ $t('info_panel.dedup.keep_label') }}
-                  </PanelActionButton>
-                </div>
+                <button
+                  type="button"
+                  class="btn btn-xs btn-ghost btn-square shrink-0"
+                  :class="[
+                    item.is_keep === 1 ? 'bg-primary/15 text-primary' : 'text-base-content/50',
+                    { 'cursor-not-allowed': duplicateActionsBusy || item.can_set_keep === false },
+                    { 'opacity-50': item.is_keep !== 1 && duplicateActionsBusy },
+                  ]"
+                  :aria-pressed="item.is_keep === 1"
+                  :aria-disabled="duplicateActionsBusy || item.can_set_keep === false"
+                  :aria-label="$t(item.is_keep === 1 ? 'info_panel.dedup.unlock_keep' : 'info_panel.dedup.lock_keep')"
+                  :title="duplicateKeepTitle(item)"
+                  @click.stop="setKeep(activeGroup.id, item.file_id)"
+                  @dblclick.stop
+                >
+                  <component :is="item.is_keep === 1 ? IconLock : IconUnlock" class="size-4" aria-hidden="true" />
+                </button>
+              </div>
+              <div
+                v-if="item.file?.file_path"
+                class="mt-1.5 flex min-w-0 items-center gap-1.5 text-xs text-base-content/70"
+                :title="getFolderPath(item.file.file_path)"
+              >
+                <IconFolder class="size-3.5 shrink-0" aria-hidden="true" />
+                <span class="min-w-0 truncate" style="flex-shrink: 1000">{{ splitDedupFolderPath(item.file).head }}</span>
+                <span class="min-w-0 truncate font-medium text-base-content/90">{{ splitDedupFolderPath(item.file).tail }}</span>
               </div>
             </div>
           </TransitionGroup>
@@ -545,7 +582,10 @@ import DedupSettings from './DedupSettings.vue';
 import TButton from '@/components/TButton.vue';
 import PanelActionButton from '@/components/PanelActionButton.vue';
 import MessageBox from '@/components/MessageBox.vue';
-import { IconAdjustments, IconSelectAll, IconExclamation, IconDeselect, IconClose, IconFlag, IconFlagFilled, IconFlagOff, IconLivePhoto, IconShield, IconRefresh, IconSplitOn, IconSplitOn4, IconTrash } from '@/common/icons';
+import { IconAdjustments, IconSelectAll, IconExclamation, IconDeselect, IconClose, IconFlag, IconFlagFilled, IconFlagOff, IconFolder, IconLivePhoto, IconLock, IconShield, IconRefresh, IconSplitOn, IconSplitOn4, IconTrash, IconUnlock } from '@/common/icons';
+import { useToast } from '@/common/toast';
+import { useUIStore } from '@/stores/uiStore';
+import { DEFAULT_PLATFORM, getShortcutLabel, matchesShortcut, type ShortcutActionId } from '@/common/shortcuts';
 import {
   dedupStartScan,
   dedupCancelScan,
@@ -580,6 +620,8 @@ const dedupPaneGlobalState = ((globalThis as any).__lapDedupPaneState ||= {
 
 const thumbnailPlaceholder = new URL('@/assets/images/image-file.png', import.meta.url).href;
 const { t } = useI18n();
+const toast = useToast();
+const uiStore = useUIStore();
 
 const props = defineProps({
   selectedFileId: {
@@ -692,20 +734,45 @@ const isDraggingDuplicateSplitter = ref(false);
 const isLoadingMoreDuplicateThumbnails = ref(false);
 let dedupScanReady = false;
 
+type DuplicateGroupSort = 'count_desc' | 'size_desc' | 'size_asc' | 'reclaimable_desc';
+const DUPLICATE_GROUP_SORTS: readonly string[] = ['count_desc', 'size_desc', 'size_asc', 'reclaimable_desc'];
+const duplicateGroupSort = computed<DuplicateGroupSort>({
+  get: () => {
+    const sort = String(config.dedup.groupSort ?? '');
+    return DUPLICATE_GROUP_SORTS.includes(sort) ? sort as DuplicateGroupSort : 'count_desc';
+  },
+  set: (value: DuplicateGroupSort) => { config.dedup.groupSort = value; },
+});
+
+function getDuplicateGroupFileSize(group: any): number {
+  const keepItem = group.items?.find((item: any) => item.is_keep === 1);
+  return getMediaItemSize(keepItem?.file) || Number(group.file_size) || 0;
+}
+
+function sortDuplicateGroups(groups: any[], sort: DuplicateGroupSort) {
+  if (sort === 'count_desc') return groups;
+  const value = sort === 'reclaimable_desc'
+    ? (group: any) => group.reclaimableBytes
+    : getDuplicateGroupFileSize;
+  const direction = sort === 'size_asc' ? 1 : -1;
+  return [...groups].sort((left, right) => direction * (value(left) - value(right)));
+}
+
+function decorateDuplicateGroup(group: any) {
+  // Rows keep their order when locks change, so the list does not jump under the cursor.
+  const items = group.items || [];
+  const duplicateItems = items.filter((item: any) => item.is_keep !== 1);
+  return {
+    ...group,
+    items,
+    keepItem: items.find((item: any) => item.is_keep === 1) || null,
+    duplicateItems,
+    reclaimableBytes: duplicateItems.reduce((sum: number, item: any) => sum + getMediaItemSize(item.file), 0),
+  };
+}
+
 const duplicateGroups = computed(() =>
-  rawGroups.value.map((group: any) => {
-    const sourceItems = group.items || [];
-    const keepItem = sourceItems.find((item: any) => item.is_keep === 1) || null;
-    const duplicateItems = sourceItems.filter((item: any) => item.is_keep === 0);
-    return {
-      ...group,
-      items: keepItem ? [keepItem, ...duplicateItems] : sourceItems,
-      keepItem,
-      duplicateItems,
-      reclaimableBytes: duplicateItems.reduce((sum: number, item: any) => sum + getMediaItemSize(item.file), 0),
-    };
-  })
-);
+  sortDuplicateGroups(rawGroups.value.map(decorateDuplicateGroup), duplicateGroupSort.value));
 
 const activeGroup = computed(() => {
   if (selectedGroupId.value === null) return null;
@@ -775,7 +842,14 @@ const similarItemsById = computed(() => new Map<number, any>(similarGroups.value
   (group.items || []).map((item: any) => [Number(item.file_id), item] as [number, any]))));
 
 function canSelectForDeletion(item: any): boolean {
-  return item?.can_delete === true && !isOriginalUnavailable(item.file);
+  return item?.can_delete === true && item.is_keep !== 1 && !isOriginalUnavailable(item.file);
+}
+
+/** Check every copy that is not locked and can be deleted safely. */
+function selectUnlockedDuplicates(groupId: number, items: any[]) {
+  selectedDupIdsByGroup.value.set(groupId, new Set(
+    items.filter(canSelectForDeletion).map((item: any) => Number(item.file_id)),
+  ));
 }
 
 function isDupSelected(groupId: number, fileId: number) {
@@ -1203,42 +1277,112 @@ function scrollSelectedDuplicateGroupIntoView(groupId: number) {
   }
 }
 
+const isChangingDuplicateKeep = ref(false);
+
+/** Toggle whether one copy is locked (kept). Several copies of a set can be locked. */
 async function setKeep(groupId: number, fileId: number) {
-  await dedupSetKeep(groupId, fileId);
-  const groupIndex = rawGroups.value.findIndex((group: any) => Number(group.id) === groupId);
-  if (groupIndex < 0) return;
+  const group = rawGroups.value.find((group: any) => Number(group.id) === groupId);
+  const item = group?.items?.find((item: any) => Number(item.file_id) === fileId);
+  if (!item || item.can_set_keep === false || isChangingDuplicateKeep.value || duplicateAccessPending.value) return;
 
-  const group = rawGroups.value[groupIndex];
-  const previousKeepId = Number(
-    (group.items || []).find((item: any) => Number(item.is_keep) === 1)?.file_id || 0,
-  );
-  const previousFiles = new Map((group.items || []).map((item: any) => [item.file_id, item.file]));
-  let items;
+  const keep = item.is_keep !== 1;
+  isChangingDuplicateKeep.value = true;
   try {
-    const detail = await dedupGetGroupItems(groupId);
-    items = detail.map((item: any) => ({
-      ...item,
-      file: previousFiles.get(item.file_id) || item.file,
-    }));
+    await dedupSetKeep(groupId, fileId, keep);
+    const groupIndex = rawGroups.value.findIndex((group: any) => Number(group.id) === groupId);
+    if (groupIndex < 0) return;
+    const previousItems = rawGroups.value[groupIndex].items || [];
+    let items: any[];
+    try {
+      const byId = new Map<number, any>((await dedupGetGroupItems(groupId))
+        .map((item: any) => [Number(item.file_id), item]));
+      // Preserve row positions and loaded thumbnails.
+      items = previousItems.flatMap((previous: any) => {
+        const current = byId.get(Number(previous.file_id));
+        if (!current) return [];
+        byId.delete(Number(previous.file_id));
+        return [{ ...current, file: previous.file || current.file }];
+      });
+      items.push(...byId.values());
+    } catch (error) {
+      // The lock change already succeeded; fall back to local state until the next reload.
+      console.error('Failed to refresh dedup group:', error);
+      items = previousItems.map((previous: any) => Number(previous.file_id) === fileId
+        ? { ...previous, is_keep: keep ? 1 : 0, can_delete: !keep && previous.can_delete }
+        : previous);
+    }
+    rawGroups.value[groupIndex] = { ...rawGroups.value[groupIndex], items };
+    selectUnlockedDuplicates(groupId, items);
+    emitDedupStatuses();
+    void refreshOverview();
   } catch (error) {
-    // The KEEP change already succeeded; fall back to the local state rather
-    // than showing a failure, and let the next group reload refresh permissions.
-    console.error('Failed to refresh dedup group:', error);
-    items = (group.items || []).map((item: any) => ({
-      ...item,
-      is_keep: Number(item.file_id) === fileId ? 1 : 0,
-    }));
+    console.error('Failed to update duplicate lock:', error);
+    toast.error(t('info_panel.dedup.keep_update_failed'));
+  } finally {
+    isChangingDuplicateKeep.value = false;
   }
-  rawGroups.value[groupIndex] = { ...group, items };
-  emitDedupStatuses();
-  void refreshOverview();
+}
 
-  const selectedIds = getDupSelectedSet(groupId);
-  selectedIds.delete(fileId);
-  const previousKeep = items.find((item: any) => Number(item.file_id) === previousKeepId);
-  if (previousKeepId !== fileId && canSelectForDeletion(previousKeep)) selectedIds.add(previousKeepId);
-  const keep = items.find((item: any) => Number(item.file_id) === fileId);
-  handleDuplicateSelection(keep ?? { file_id: fileId });
+function duplicateActionTitle(label: string, action: ShortcutActionId) {
+  const shortcut = getShortcutLabel(action, DEFAULT_PLATFORM, config.shortcutBindings);
+  return shortcut ? `${label} (${shortcut})` : label;
+}
+
+function duplicateKeepTitle(item: any) {
+  if (item.can_set_keep === false) return t('info_panel.dedup.last_keep');
+  return duplicateActionTitle(
+    t(item.is_keep === 1 ? 'info_panel.dedup.unlock_keep' : 'info_panel.dedup.lock_keep'),
+    'dedup.toggleKeep',
+  );
+}
+
+const DUPLICATE_SHORTCUT_ACTIONS = ['dedup.toggleKeep', 'dedup.deleteSelected', 'dedup.deleteSet'] as const;
+
+function handleDuplicateShortcuts(event: KeyboardEvent) {
+  if (!props.panelOpen || activeTab.value !== 'duplicates' || !activeGroup.value || isDedupLoading.value
+    || event.defaultPrevented || event.isComposing || uiStore.inputStack.length > 0 || showKeepRules.value) return;
+  const target = event.target as HTMLElement | null;
+  if (target?.closest('input:not([type="checkbox"]), textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+
+  const group = activeGroup.value;
+  const rowId = Number(target?.closest<HTMLElement>('[data-duplicate-file-id]')?.dataset.duplicateFileId || 0);
+  const plain = !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+  if (plain && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+    event.preventDefault();
+    event.stopPropagation();
+    focusDuplicateRow(group, rowId, event.key === 'ArrowDown' ? 1 : -1);
+    return;
+  }
+
+  const action = DUPLICATE_SHORTCUT_ACTIONS.find(id => matchesShortcut(id, event, DEFAULT_PLATFORM, config.shortcutBindings));
+  if (!action) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.repeat) return;
+
+  if (action === 'dedup.deleteSelected') {
+    trashSelectedDuplicates(group.id);
+  } else if (action === 'dedup.deleteSet') {
+    trashSetDuplicates(group.id);
+  } else {
+    const selectedId = Number(props.selectedFileId);
+    const item = group.items.find((item: any) => Number(item.file_id) === (rowId || selectedId))
+      ?? group.items.find((item: any) => !rowId && selectedId > 0 && Number(item.raw_pair_primary_id) === selectedId);
+    if (item) void setKeep(group.id, Number(item.file_id));
+  }
+}
+
+function focusDuplicateRow(group: any, currentId: number, step: number) {
+  const items = group.items || [];
+  if (items.length === 0) return;
+  const selectedId = Number(props.selectedFileId);
+  let index = items.findIndex((item: any) => Number(item.file_id) === (currentId || selectedId));
+  index = index < 0 ? (step > 0 ? 0 : items.length - 1) : Math.min(items.length - 1, Math.max(0, index + step));
+  const item = items[index];
+  const row = document.querySelector<HTMLElement>(`[data-dedup-shortcuts] [data-duplicate-file-id="${Number(item.file_id)}"]`);
+  row?.focus();
+  row?.scrollIntoView({ block: 'nearest' });
+  handleDuplicateSelection(item);
 }
 
 async function setSimilarKeep(groupId: number, fileId: number) {
@@ -1271,7 +1415,7 @@ async function setSimilarKeep(groupId: number, fileId: number) {
   emit('select-file', fileId);
 }
 
-function selectGroupDuplicates(groupId: number, keepFileId: number) {
+function selectGroupDuplicates(groupId: number) {
   const group = duplicateGroups.value.find(g => g.id === groupId);
   if (!group) return;
 
@@ -1285,9 +1429,7 @@ function selectGroupDuplicates(groupId: number, keepFileId: number) {
   }
 
   set.clear();
-  for (const id of duplicateIds) {
-    if (id !== keepFileId) set.add(id);
-  }
+  for (const id of duplicateIds) set.add(id);
 }
 
 function isAllGroupDuplicatesSelected(groupId: number) {
@@ -1298,8 +1440,24 @@ function isAllGroupDuplicatesSelected(groupId: number) {
   return available.length > 0 && available.every((item: any) => set.has(item.file_id));
 }
 
+const duplicateActionsBusy = computed(() => isChangingDuplicateKeep.value || duplicateAccessPending.value);
+const checkedDeleteLabel = computed(() => t(config.settings.fileDeleteBehavior === 'permanent'
+  ? 'info_panel.dedup.delete_checked' : 'info_panel.dedup.trash_selected'));
+const setDeleteLabel = computed(() => t(config.settings.fileDeleteBehavior === 'permanent'
+  ? 'info_panel.dedup.delete_set' : 'info_panel.dedup.trash_set'));
+
 function trashSelectedDuplicates(groupId: number) {
+  if (duplicateActionsBusy.value) return;
   const ids = Array.from(getDupSelectedSet(groupId).values()).filter(fileId => isDupSelected(groupId, fileId));
+  if (ids.length === 0) return;
+  emit('trash-selected-duplicates', String(groupId), ids);
+}
+
+/** Delete every unlocked copy in the set, whether or not it is checked. */
+function trashSetDuplicates(groupId: number) {
+  if (duplicateActionsBusy.value) return;
+  const group = rawGroups.value.find((group: any) => Number(group.id) === groupId);
+  const ids = (group?.items || []).filter(canSelectForDeletion).map((item: any) => Number(item.file_id));
   if (ids.length === 0) return;
   emit('trash-selected-duplicates', String(groupId), ids);
 }
@@ -1392,6 +1550,16 @@ function dedupPairBadge(item: any): string {
     return formatRawPairBadge(item.file.live_photo_video_path);
   }
   return '';
+}
+
+/** Split the location so the end stays visible: the head truncates first, then the last folder. */
+function splitDedupFolderPath(file: any): { head: string; tail: string } {
+  const path = formatDedupFolderPath(file);
+  const separator = ' > ';
+  const index = path.lastIndexOf(separator);
+  return index < 0
+    ? { head: '', tail: path }
+    : { head: path.slice(0, index + separator.length), tail: path.slice(index + separator.length) };
 }
 
 function formatDedupFolderPath(file: any): string {
@@ -1509,18 +1677,19 @@ async function fetchGroups(preferredGroupId: number | null = null) {
     const groups = await dedupListGroups(1, 0, 'count_desc', 'all');
     const normalized = Array.isArray(groups) ? groups : [];
     const availableGroupIds = new Set(normalized.map((group: any) => Number(group.id)));
+    const orderedGroups = sortDuplicateGroups(normalized.map(decorateDuplicateGroup), duplicateGroupSort.value);
     const nextSelectedGroupId =
       preferredGroupId && availableGroupIds.has(preferredGroupId)
         ? preferredGroupId
         : selectedGroupId.value && availableGroupIds.has(selectedGroupId.value)
           ? selectedGroupId.value
-          : normalized.length > 0
-            ? Number(normalized[0].id)
+          : orderedGroups.length > 0
+            ? Number(orderedGroups[0].id)
             : null;
 
     loadedDuplicateGroupCount.value = DEDUP_THUMBNAIL_PAGE_SIZE;
     await hydrateAlbumRootPaths(normalized);
-    await hydrateGroupThumbnails(normalized, nextSelectedGroupId);
+    await hydrateGroupThumbnails(orderedGroups, nextSelectedGroupId);
     rawGroups.value = normalized;
     emitDedupStatuses();
     await refreshOverview();
@@ -1531,20 +1700,10 @@ async function fetchGroups(preferredGroupId: number | null = null) {
       }
     }
 
-    // Default-select all duplicate (non-keep) items for newly loaded groups
+    // Check every unlocked copy in newly loaded sets.
     for (const group of rawGroups.value) {
       const groupId = Number(group.id);
-      if (!selectedDupIdsByGroup.value.has(groupId)) {
-        const set = new Set<number>();
-        for (const item of (group.items || [])) {
-          if (item.is_keep !== 1 && canSelectForDeletion(item)) {
-            set.add(Number(item.file_id));
-          }
-        }
-        if (set.size > 0) {
-          selectedDupIdsByGroup.value.set(groupId, set);
-        }
-      }
+      if (!selectedDupIdsByGroup.value.has(groupId)) selectUnlockedDuplicates(groupId, group.items || []);
     }
 
     selectedGroupId.value = nextSelectedGroupId;
@@ -1777,6 +1936,12 @@ watch(
     if (newKey && activeTab.value === 'similar') void openSimilarTab();
   },
 );
+
+watch(duplicateGroupSort, async () => {
+  loadedDuplicateGroupCount.value = DEDUP_THUMBNAIL_PAGE_SIZE;
+  duplicateGroupsScrollRef.value?.scrollTo({ top: 0 });
+  await hydrateGroupThumbnails(duplicateGroups.value, selectedGroupId.value);
+});
 
 watch(selectedGroupId, async (groupId, prevGroupId) => {
   if (!groupId || groupId === prevGroupId) return;

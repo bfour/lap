@@ -835,7 +835,7 @@ import {
   normalizeGridSizePosition,
   thumbnailProfile,
 } from '@/common/thumbnailProfiles';
-import { getShortcutLabel, hasShortcutOverride, matchesShortcut, shouldAdvanceShortcut, ShortcutActionId, ShortcutEventLike, ShortcutPlatform, VIEW_BACKGROUND_SHORTCUTS } from '@/common/shortcuts';
+import { getShortcutLabel, hasShortcutOverride, isDedupPaneShortcut, matchesShortcut, shouldAdvanceShortcut, ShortcutActionId, ShortcutEventLike, ShortcutPlatform, VIEW_BACKGROUND_SHORTCUTS } from '@/common/shortcuts';
 import { getSmartTagById } from '@/common/smartTags';
 import { handleVideoPlaybackShortcut, handleVideoEscapeShortcut } from '@/common/video';
 import { clearFolderFileCounts, setFolderFileCount, getCountedFolderPaths } from '@/composables/useAlbumSelection';
@@ -5143,6 +5143,7 @@ function handleLocalKeyDown(event: KeyboardEvent) {
 
   // Do not intercept editing shortcuts while typing.
   const target = event.target as HTMLElement;
+  if (isDedupPaneShortcut(event, shortcutPlatform, config.shortcutBindings)) return;
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable) {
     return;
   }

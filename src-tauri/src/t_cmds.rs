@@ -5009,8 +5009,13 @@ pub async fn dedup_get_overview(library_id: String, group_raw_pairs: bool) -> Re
 }
 
 #[tauri::command]
-pub fn dedup_set_keep(group_id: i64, file_id: i64, group_raw_pairs: Option<bool>) -> Result<(), String> {
-    crate::t_dedup::set_keep(group_id, file_id, group_raw_pairs.unwrap_or(false))
+pub fn dedup_set_keep(
+    group_id: i64,
+    file_id: i64,
+    keep: Option<bool>,
+    group_raw_pairs: Option<bool>,
+) -> Result<(), String> {
+    crate::t_dedup::set_keep(group_id, file_id, keep.unwrap_or(true), group_raw_pairs.unwrap_or(false))
 }
 
 #[tauri::command]

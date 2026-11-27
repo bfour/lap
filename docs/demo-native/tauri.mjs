@@ -33,6 +33,7 @@ let libraryState = db.libraryState || null,
 let thumbnailCacheLocation = { path: "/Browser/Lap Demo/Cache", custom: false };
 const thumbnailCacheMigrations = new Map();
 const keeps = new Map(),
+  duplicateKeeps = new Map(),
   listeners = new Map();
 export const commands = [];
 const save = () => localStorage.setItem(KEY, JSON.stringify(db));
@@ -402,21 +403,30 @@ function groups(similar = false) {
         file_size: nativeFile(g[0]).size,
         file_count: g.length,
         total_size: g.reduce((s, p) => s + nativeFile(p).size, 0),
-        reviewed: keeps.has(groupId) ? 1 : 0,
+        reviewed: (similar ? keeps : duplicateKeeps).has(groupId) ? 1 : 0,
         updated_at: 1740000000,
         representative: nativeFile(g[0]),
         files: g.map(nativeFile),
-        items: g.map((p, j) => ({
+        items: g.map((p, j) => {
+          const locked = duplicateKeeps.get(groupId);
+          const isKeep = similar
+            ? keeps.get(groupId)
+              ? keeps.get(groupId) === p.id
+              : j === 0
+            : locked
+              ? locked.has(p.id)
+              : j === 0;
+          return {
           group_id: groupId,
           file_id: p.id,
-          is_keep: keeps.get(groupId)
-            ? Number(keeps.get(groupId) === p.id)
-            : Number(j === 0),
-          can_delete: true,
+          is_keep: Number(isKeep),
+          can_set_keep: similar || !isKeep || (locked?.size ?? 1) > 1,
+          can_delete: similar || !isKeep,
           is_selected: 0,
           score: 1 - j * 0.01,
           file: nativeFile(p),
-        })),
+          };
+        }),
       };
     });
 }
@@ -1280,7 +1290,18 @@ export async function invoke(command, args = {}) {
         ? groups().reduce((s, g) => s + g.file_size * (g.file_count - 1), 0)
         : 0,
     };
-  if (command === "dedup_set_keep" || command === "similar_set_keep") {
+  if (command === "dedup_set_keep") {
+    const group = groups().find((g) => g.id === args.groupId);
+    const locked = new Set(
+      group?.items.filter((i) => i.is_keep).map((i) => i.file_id) ?? [],
+    );
+    if (args.keep === false) locked.delete(args.fileId);
+    else locked.add(args.fileId);
+    if (locked.size === 0) throw new Error("The set must keep a copy");
+    duplicateKeeps.set(args.groupId, locked);
+    return true;
+  }
+  if (command === "similar_set_keep") {
     keeps.set(args.groupId, args.fileId);
     return true;
   }

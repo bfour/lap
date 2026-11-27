@@ -305,19 +305,25 @@ const assert = require("node:assert/strict");
     await dedup
       .getByRole("button", { name: "Duplicates", exact: true })
       .click();
-    const keep = dedup.getByRole("button", { name: "Keep", exact: true }).last();
-    await keep.locator("../..").hover();
-    await keep.click();
-    assert(
-      await page.evaluate(() =>
-        window.__lapDemoBackend.commands.some(
-          (c) => c.command === "dedup_set_keep",
-        ),
-      ),
-    );
-    await dedup.locator('input[type="checkbox"]').check();
     await dedup
-      .getByRole("button", { name: "Move to trash", exact: true })
+      .getByRole("button", { name: "Lock to keep this copy", exact: true })
+      .last()
+      .click();
+    await dedup
+      .getByRole("button", { name: "Unlock this copy", exact: true })
+      .first()
+      .click();
+    await page.waitForFunction(
+      () =>
+        window.__lapDemoBackend.commands.filter(
+          (c) => c.command === "dedup_set_keep",
+        ).length === 2,
+    );
+    // The unlocked copy is checked for deletion automatically.
+    await dedup.locator('input[type="checkbox"]:checked').waitFor();
+    await shot("dedup-locks-native");
+    await dedup
+      .getByRole("button", { name: "Move checked to trash", exact: true })
       .click();
     await page.waitForFunction(
       () =>
