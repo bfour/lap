@@ -5019,6 +5019,16 @@ pub fn dedup_set_keep(
 }
 
 #[tauri::command]
+pub async fn dedup_set_group_hidden(group_id: i64, hidden: bool) -> Result<(), String> {
+    let library_id = t_config::current_library_id()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        with_current_library(&library_id, || crate::t_dedup::set_group_hidden(group_id, hidden))
+    })
+    .await
+    .map_err(|error| format!("Failed to update hidden duplicate set: {error}"))?
+}
+
+#[tauri::command]
 pub fn dedup_get_group_items(
     group_id: i64,
     group_raw_pairs: bool,

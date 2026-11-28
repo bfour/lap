@@ -10991,6 +10991,17 @@ fn create_db_internal() -> Result<(), String> {
         [],
     )
     .map_err(|e| e.to_string())?;
+    // Duplicate sets the user chose to skip, keyed by content so they stay hidden across rescans.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS duplicate_hidden_sets (
+            hash TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            hidden_at INTEGER NOT NULL,
+            PRIMARY KEY (hash, file_size)
+        )",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
 
     // Run schema migrations after base tables are ensured.
     crate::t_migration::check_and_migrate(&conn)?;

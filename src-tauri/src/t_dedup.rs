@@ -829,6 +829,8 @@ pub struct DedupGroup {
     pub total_size: i64,
     pub reviewed: i32,
     pub updated_at: i64,
+    /// The user skipped this set; it is listed separately and excluded from bulk deletion.
+    pub hidden: bool,
     pub items: Vec<DedupGroupItem>,
 }
 
@@ -851,19 +853,30 @@ pub struct DedupOverview {
     pub total_groups: i64,
     pub total_files: i64,
     pub total_reclaimable_bytes: i64,
+    pub hidden_groups: i64,
     pub pair_match_ids: Vec<i64>,
+}
+
+/// SQL predicate that is true when the duplicate group aliased as `{alias}` was hidden by the user.
+fn hidden_group_sql(alias: &str) -> String {
+    format!(
+        "EXISTS (SELECT 1 FROM duplicate_hidden_sets hs
+                 WHERE hs.hash = {alias}.hash AND hs.file_size = {alias}.file_size)"
+    )
 }
 
 pub fn get_overview(group_raw_pairs: bool) -> Result<DedupOverview, String> {
     let conn = get_db_conn()?;
     let tx = conn.unchecked_transaction().map_err(|error| error.to_string())?;
     let conn = &tx;
-    let total_groups = conn.query_row(
-        "SELECT COUNT(*) FROM (
-            SELECT group_id FROM duplicate_group_items GROUP BY group_id HAVING COUNT(*) > 1
-        )",
+    let hidden = hidden_group_sql("g");
+    let (total_groups, hidden_groups): (i64, i64) = conn.query_row(
+        &format!(
+            "SELECT COALESCE(SUM(NOT {hidden}), 0), COALESCE(SUM({hidden}), 0) FROM duplicate_groups g
+             WHERE (SELECT COUNT(*) FROM duplicate_group_items i WHERE i.group_id = g.id) > 1"
+        ),
         [],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     ).map_err(|error| error.to_string())?;
     let candidates = bulk_duplicate_candidates(conn)?;
     let files = safe_dedup_delete_candidates(conn, candidates, group_raw_pairs, false)?;
@@ -917,6 +930,7 @@ pub fn get_overview(group_raw_pairs: bool) -> Result<DedupOverview, String> {
         total_groups,
         total_files,
         total_reclaimable_bytes,
+        hidden_groups,
         pair_match_ids,
     })
 }
@@ -951,11 +965,17 @@ pub fn list_groups(
         }
     };
 
+    let hidden = hidden_group_sql("duplicate_groups");
+    let filter_clause = match filter {
+        "hidden" => format!("{filter_clause} AND {hidden}"),
+        "visible" => format!("{filter_clause} AND NOT {hidden}"),
+        _ => filter_clause.to_string(),
+    };
     let query = format!(
         "SELECT id, hash, file_size, 
                 (SELECT COUNT(*) FROM duplicate_group_items WHERE group_id = duplicate_groups.id) as cur_count,
                 ((SELECT COUNT(*) FROM duplicate_group_items WHERE group_id = duplicate_groups.id) * file_size) as cur_size,
-                reviewed, updated_at
+                reviewed, updated_at, {hidden}
          FROM duplicate_groups
          {}
          ORDER BY {}
@@ -981,6 +1001,7 @@ pub fn list_groups(
                 total_size: row.get(4)?,
                 reviewed: row.get(5)?,
                 updated_at: row.get(6)?,
+                hidden: row.get(7)?,
                 items: Vec::new(),
             })
         })
@@ -1329,6 +1350,34 @@ pub(crate) fn apply_keep_rules(
     Ok(changed)
 }
 
+/// Hide (skip) or unhide a duplicate set. The choice is stored by content hash and size,
+/// so it survives refreshes and rescans that recreate the group with a new id.
+pub fn set_group_hidden(group_id: i64, hidden: bool) -> Result<(), String> {
+    let conn = get_db_conn()?;
+    set_group_hidden_on(&conn, group_id, hidden)
+}
+
+fn set_group_hidden_on(conn: &Connection, group_id: i64, hidden: bool) -> Result<(), String> {
+    let (hash, file_size): (String, i64) = conn.query_row(
+        "SELECT hash, file_size FROM duplicate_groups WHERE id = ?1",
+        params![group_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).map_err(|error| format!("Duplicate set not found: {error}"))?;
+    if hidden {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        conn.execute(
+            "INSERT OR REPLACE INTO duplicate_hidden_sets (hash, file_size, hidden_at) VALUES (?1, ?2, ?3)",
+            params![hash, file_size, now],
+        )
+    } else {
+        conn.execute(
+            "DELETE FROM duplicate_hidden_sets WHERE hash = ?1 AND file_size = ?2",
+            params![hash, file_size],
+        )
+    }.map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 /// Lock (`keep = true`) or unlock one copy. A set may keep several copies, but
 /// it must always keep at least one, and a kept RAW/Live Photo pair can only be
 /// released while another paired copy stays kept.
@@ -1491,15 +1540,18 @@ fn raw_pair_has_exact_keep(conn: &Connection, file_id: i64) -> Result<bool, Stri
 }
 
 fn bulk_duplicate_candidates(conn: &Connection) -> Result<Vec<crate::t_cmds::BatchDeleteFile>, String> {
-    let mut stmt = conn.prepare(
+    // Hidden (skipped) sets are never part of a bulk delete.
+    let hidden = hidden_group_sql("g");
+    let mut stmt = conn.prepare(&format!(
         "SELECT a.id, f.path || '/' || a.name
          FROM duplicate_group_items dgi
+         JOIN duplicate_groups g ON g.id = dgi.group_id
          JOIN afiles a ON dgi.file_id = a.id
          JOIN afolders f ON a.folder_id = f.id
-         WHERE dgi.is_keep = 0
+         WHERE dgi.is_keep = 0 AND NOT {hidden}
            AND EXISTS (SELECT 1 FROM duplicate_group_items k
                        WHERE k.group_id = dgi.group_id AND k.is_keep = 1)",
-    ).map_err(|error| error.to_string())?;
+    )).map_err(|error| error.to_string())?;
     let rows = stmt.query_map([], |row| Ok(crate::t_cmds::BatchDeleteFile {
         file_id: row.get(0)?,
         file_path: row.get(1)?,
@@ -1994,6 +2046,53 @@ mod keep_rules_tests {
         assert_eq!(winner(&conn), 2);
         apply_keep_rules_on(&conn, None, rules(vec![])).unwrap();
         assert_eq!(winner(&conn), 2);
+    }
+
+    #[test]
+    fn hidden_sets_survive_rescans_and_are_excluded_from_bulk_deletion() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE afolders(id INTEGER PRIMARY KEY,path TEXT);
+             INSERT INTO afolders VALUES (1,'/photos');
+             CREATE TABLE afiles(id INTEGER PRIMARY KEY,folder_id INTEGER,name TEXT,file_type INTEGER,
+                 size INTEGER,width INTEGER,height INTEGER,created_at INTEGER,taken_date INTEGER,
+                 media_subtype TEXT,live_photo_video_id INTEGER,format_label TEXT,modified_at INTEGER);
+             INSERT INTO afiles VALUES
+                 (1,1,'a.jpg',1,100,10,10,1,1,NULL,NULL,'JPG',1),
+                 (2,1,'a-copy.jpg',1,100,10,10,2,2,NULL,NULL,'JPG',2),
+                 (3,1,'b.jpg',1,50,10,10,3,3,NULL,NULL,'JPG',3),
+                 (4,1,'b-copy.jpg',1,50,10,10,4,4,NULL,NULL,'JPG',4);
+             CREATE TABLE file_hashes(file_id INTEGER,hash TEXT,file_size INTEGER,mtime INTEGER);
+             INSERT INTO file_hashes VALUES (1,'a',100,1),(2,'a',100,2),(3,'b',50,3),(4,'b',50,4);
+             CREATE TABLE duplicate_groups(id INTEGER PRIMARY KEY,hash TEXT,file_size INTEGER,
+                 file_count INTEGER,total_size INTEGER,updated_at INTEGER,reviewed INTEGER DEFAULT 0,
+                 UNIQUE(hash,file_size));
+             CREATE TABLE duplicate_group_items(group_id INTEGER,file_id INTEGER,is_keep INTEGER,
+                 is_selected INTEGER,score REAL,PRIMARY KEY(group_id,file_id));
+             CREATE TABLE duplicate_hidden_sets(hash TEXT NOT NULL,file_size INTEGER NOT NULL,
+                 hidden_at INTEGER NOT NULL,PRIMARY KEY(hash,file_size));",
+        ).unwrap();
+        let candidates = |conn: &Connection| {
+            let mut ids = bulk_duplicate_candidates(conn).unwrap()
+                .into_iter().map(|file| file.file_id).collect::<Vec<_>>();
+            ids.sort();
+            ids
+        };
+        let group_of = |conn: &Connection, hash: &str| -> i64 {
+            conn.query_row("SELECT id FROM duplicate_groups WHERE hash = ?1", [hash], |row| row.get(0)).unwrap()
+        };
+
+        rebuild_duplicate_groups(&mut conn, None, None, false).unwrap();
+        assert_eq!(candidates(&conn), [2, 4]);
+
+        set_group_hidden_on(&conn, group_of(&conn, "a"), true).unwrap();
+        assert_eq!(candidates(&conn), [4]);
+        // A rescan recreates the group with a new id, but the set stays hidden.
+        rebuild_duplicate_groups(&mut conn, None, None, false).unwrap();
+        assert_eq!(candidates(&conn), [4]);
+
+        set_group_hidden_on(&conn, group_of(&conn, "a"), false).unwrap();
+        assert_eq!(candidates(&conn), [2, 4]);
     }
 
     #[test]

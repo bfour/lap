@@ -435,6 +435,7 @@ async fn main() {
             t_cmds::dedup_get_overview,
             t_cmds::dedup_set_keep,
             t_cmds::dedup_get_group_items,
+            t_cmds::dedup_set_group_hidden,
             t_cmds::dedup_delete,
             t_cmds::similar_start_scan,
             t_cmds::similar_get_scan_status,
